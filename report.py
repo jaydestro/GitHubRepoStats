@@ -3,6 +3,7 @@ import pandas as pd
 import argparse
 from datetime import datetime
 import os
+from pymongo import MongoClient
 
 def get_github_data(api_url, token):
     """
@@ -93,12 +94,27 @@ def add_grouped_totals(df, date_column, metrics_columns):
         return pd.concat([df, monthly_totals, yearly_totals], ignore_index=True)
     return df
 
+def get_mongo_client(connection_string):
+    """
+    Create a MongoDB client using the provided connection string.
+    """
+    return MongoClient(connection_string)
+
+def save_to_mongodb(client, database_name, collection_name, data):
+    """
+    Save data to MongoDB.
+    """
+    db = client[database_name]
+    collection = db[collection_name]
+    collection.insert_many(data)
+
 def main():
     parser = argparse.ArgumentParser(description='GitHub Repository Traffic Data Fetcher')
     parser.add_argument('--repo', required=True, help='Repository name')
     parser.add_argument('--owner', required=True, help='Organization/user name that owns the repository')
     parser.add_argument('--filename', help='Optional: Specify a filename for the Excel output. If not provided, defaults to {owner}-{repo}-traffic-data.xlsx')
     parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
+    parser.add_argument('--mongodb-connection-string', help='Optional: MongoDB connection string to store the data')
 
     args = parser.parse_args()
 
@@ -109,35 +125,16 @@ def main():
     base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
     filename = args.filename or f"{args.owner}-{args.repo}-traffic-data.xlsx"
 
-    # Initialize DataFrames
-    traffic_df = pd.DataFrame()
-    clones_df = pd.DataFrame()
-    referrers_df = pd.DataFrame()
-    popular_content_df = pd.DataFrame()
-
-    # Check if the file exists and read existing data
-    if os.path.isfile(filename):
-        with pd.ExcelWriter(filename, mode='a', engine='openpyxl') as writer:
-            if 'Traffic Stats' in writer.book.sheetnames:
-                traffic_df = pd.read_excel(writer.book['Traffic Stats'])
-            if 'Git Clones' in writer.book.sheetnames:
-                clones_df = pd.read_excel(writer.book['Git Clones'])
-            if 'Referring Sites' in writer.book.sheetnames:
-                referrers_df = pd.read_excel(writer.book['Referring Sites'])
-            if 'Popular Content' in writer.book.sheetnames:
-                popular_content_df = pd.read_excel(writer.book['Popular Content'])
-
-    # Fetch new data
+    # Fetch and process data
     views_data = get_github_data(f"{base_url}/traffic/views", token)
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
     referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
     popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
 
-    # Process and append new data
-    traffic_df = append_new_data(traffic_df, process_traffic_data(views_data), 'Date')
-    clones_df = append_new_data(clones_df, process_clones_data(clones_data), 'Date')
-    referrers_df = append_new_data(referrers_df, process_referrers_data(referrers_data), 'Referring site')
-    popular_content_df = append_new_data(popular_content_df, process_popular_content_data(popular_content_data), 'Path')
+    traffic_df = append_new_data(pd.DataFrame(), process_traffic_data(views_data), 'Date')
+    clones_df = append_new_data(pd.DataFrame(), process_clones_data(clones_data), 'Date')
+    referrers_df = append_new_data(pd.DataFrame(), process_referrers_data(referrers_data), 'Referring site')
+    popular_content_df = append_new_data(pd.DataFrame(), process_popular_content_data(popular_content_data), 'Path')
 
     # Add grouped totals for Traffic Stats and Git Clones
     traffic_df = add_grouped_totals(traffic_df, 'Date', ['Views', 'Unique visitors'])
@@ -150,7 +147,18 @@ def main():
         referrers_df.to_excel(writer, sheet_name='Referring Sites', index=False)
         popular_content_df.to_excel(writer, sheet_name='Popular Content', index=False)
 
-    print(f"Traffic data saved to {filename}")
+    print(f"Data successfully saved to {filename}")
+
+    # Save to MongoDB if connection string is provided
+    if args.mongodb_connection_string:
+        mongo_client = get_mongo_client(args.mongodb_connection_string)
+        database_name = "GitHubTrafficData"
+        save_to_mongodb(mongo_client, database_name, "TrafficStats", traffic_df.to_dict('records'))
+        save_to_mongodb(mongo_client, database_name, "GitClones", clones_df.to_dict('records'))
+        save_to_mongodb(mongo_client, database_name, "ReferringSites", referrers_df.to_dict('records'))
+        save_to_mongodb(mongo_client, database_name, "PopularContent", popular_content_df.to_dict('records'))
+
+        print("Data also saved to MongoDB")
 
 if __name__ == "__main__":
     main()
