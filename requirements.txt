@@ -1,3 +1,5 @@
 pandas
 requests
 pymongo
+pytest 
+pytest-mock
