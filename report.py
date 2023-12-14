@@ -3,6 +3,87 @@ import pandas as pd
 import argparse
 from datetime import datetime
 from pymongo import MongoClient
+import json
+from jsonschema import validate, ValidationError
+
+# Schema for traffic data
+traffic_data_schema = {
+    "type": "object",
+    "properties": {
+        "views": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "timestamp": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "uniques": {"type": "integer"},
+                },
+                "required": ["timestamp", "count", "uniques"],
+            },
+        },
+    },
+    "required": ["views"],
+}
+
+# Schema for clones data
+clones_data_schema = {
+    "type": "object",
+    "properties": {
+        "clones": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "timestamp": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "uniques": {"type": "integer"},
+                },
+                "required": ["timestamp", "count", "uniques"],
+            },
+        },
+        "count": {"type": "integer"},
+        "uniques": {"type": "integer"},
+    },
+    "required": ["clones", "count", "uniques"],
+}
+
+# Schema for referrers data
+referrers_data_schema = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "referrer": {"type": "string"},
+            "count": {"type": "integer"},
+            "uniques": {"type": "integer"},
+        },
+        "required": ["referrer", "count", "uniques"],
+    },
+}
+
+# Schema for popular content data
+popular_content_data_schema = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "count": {"type": "integer"},
+            "uniques": {"type": "integer"},
+        },
+        "required": ["path", "count", "uniques"],
+    },
+}
+
+# Function to validate JSON data against a schema
+def validate_json_data(data, schema):
+    try:
+        validate(instance=data, schema=schema)
+        return True
+    except ValidationError as e:
+        print(f"Validation error: {e.message}")
+        return False
 
 # Function to fetch data from GitHub API
 def get_github_data(api_url, token):
@@ -107,6 +188,8 @@ def main():
         return
 
     base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
+    # Remove dashes and make the database name camelcase
+    database_name = args.repo.replace("-", "").capitalize()
     filename = args.filename or f"{args.owner}-{args.repo}-traffic-data.xlsx"
 
     # Fetch and process data
@@ -114,6 +197,10 @@ def main():
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
     referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
     popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
+
+    # Validate fetched data against schemas
+    if not validate_json_data(views_data, traffic_data_schema) or not validate_json_data(clones_data, clones_data_schema) or not validate_json_data(referrers_data, referrers_data_schema) or not validate_json_data(popular_content_data, popular_content_data_schema):
+        return
 
     traffic_df = append_new_data(pd.DataFrame(), process_traffic_data(views_data), 'Date')
     clones_df = append_new_data(pd.DataFrame(), process_clones_data(clones_data), 'Date')
@@ -139,7 +226,6 @@ def main():
     # Save to MongoDB if connection string is provided
     if args.mongodb_connection_string:
         mongo_client = get_mongo_client(args.mongodb_connection_string)
-        database_name = "GitHubTrafficData"
         save_to_mongodb(mongo_client, database_name, "TrafficStats", traffic_df.to_dict('records'))
         save_to_mongodb(mongo_client, database_name, "GitClones", clones_df.to_dict('records'))
         save_to_mongodb(mongo_client, database_name, "ReferringSites", referrers_df.to_dict('records'))
