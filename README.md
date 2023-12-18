@@ -46,6 +46,12 @@ The script accepts the following command-line arguments:
 - `--token-file`: The path to the text file containing your GitHub Personal Access Token.
 - `--mongodb-connection-string` (optional): The MongoDB connection string to store the data. Omit this flag if you do not wish to use MongoDB.
 
+Example command:
+
+```bash
+python report.py --repo your-repository --owner your-username --token-file path/to/token.txt
+```
+
 ## Data Output
 
 The script processes and outputs data in the following categories:
