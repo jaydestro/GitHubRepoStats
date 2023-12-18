@@ -2,3 +2,4 @@ pandas
 requests
 pymongo
 jsonschema
+azure-cosmos
