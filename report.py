@@ -1,3 +1,5 @@
+import aiohttp
+import asyncio
 import requests
 import pandas as pd
 import argparse
