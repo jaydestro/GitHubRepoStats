@@ -153,11 +153,11 @@ def process_referrers_data(data):
             "Referring Site": referrer,
             "Views": count,
             "Unique Visitors": uniques,
-            "Date": format_datetime(datetime.now(), with_time=False)
+            "Date": format_datetime(datetime.now(), with_time=False),
+            "Type": "Daily"  # Add a new "Type" column with "Daily" for daily data
         })
 
     df = pd.DataFrame(referrer_list)
-    df['Month-Year'] = pd.to_datetime(df['Date']).dt.to_period('M')
     return df
 
 def process_popular_content_data(data):
@@ -177,18 +177,26 @@ def process_popular_content_data(data):
             "Content Title": title,
             "Views": count,
             "Unique Visitors": uniques,
-            "Date": format_datetime(datetime.now(), with_time=False)
+            "Date": format_datetime(datetime.now(), with_time=False),
+            "Type": "Daily"  # Add a new "Type" column with "Daily" for daily data
         })
 
     df = pd.DataFrame(content_list)
-    df['Month-Year'] = pd.to_datetime(df['Date']).dt.to_period('M')
     return df
-
     
 def process_dataframe(df, date_column):
-    df = df.drop_duplicates(subset=[date_column])
+    # Remove 'id' column if present
     if 'id' in df.columns:
-        df = df.drop(columns=['id'])
+        df = df.drop('id', axis=1)
+
+    df = append_monthly_yearly_totals(df, date_column)
+    return df
+
+def process_dataframe(df, date_column):
+    # Remove 'id' column if present
+    if 'id' in df.columns:
+        df = df.drop('id', axis=1)
+
     df = append_monthly_yearly_totals(df, date_column)
     return df
 
