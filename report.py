@@ -282,14 +282,14 @@ def append_monthly_yearly_totals(df, date_column):
 
     # Calculate monthly and yearly totals
     monthly_totals = valid_data_df.resample('M', on=date_column)[numeric_cols].sum()
-    monthly_totals['Type'] = 'Monthly Total'
+    monthly_totals['Type'] = 'Monthly Total - ' + monthly_totals.index.strftime('%m.%Y')  # Format as "Monthly Total - 12.2023"
+    
     yearly_totals = valid_data_df.resample('Y', on=date_column)[numeric_cols].sum()
-    yearly_totals['Type'] = 'Yearly Total'
+    yearly_totals['Type'] = 'Yearly Total - ' + yearly_totals.index.year.astype(str)  # Format as "Yearly Total - 2023"
 
     # Append totals
     df = pd.concat([df, monthly_totals, yearly_totals], ignore_index=True)
     return df
-
 
 def clean_dataframe(df, date_column='Date'):
     # Remove '_id' column if present
