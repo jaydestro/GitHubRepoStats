@@ -95,7 +95,7 @@ Each category is available in a structured format and is saved into separate she
 
 This project has several areas for future development and improvement to enhance its capabilities and integration with other services. The following items are on the current to-do list:
 
-1. **Azure Cosmos DB Integration**: 
+1. **Azure Cosmos DB Integration**:
    - Add functionality to support Azure Cosmos DB as an alternative NoSQL database option.
    - This will provide users with more flexibility in choosing their database solution and leverage Azure's global distribution and multi-model support.
 
