@@ -91,7 +91,7 @@ The script processes and outputs data in the following categories:
 
 Each category is available in a structured format and is saved into separate sheets in an Excel file. Additionally, each category is stored as a collection in the MongoDB database, providing persistent storage and enabling advanced querying capabilities. MongoDB integration is a core feature of this tool, ensuring comprehensive data management and analysis.
 
-## Todo
+## TODO
 
 This project has several areas for future development and improvement to enhance its capabilities and integration with other services. The following items are on the current to-do list:
 
