@@ -1,91 +1,9 @@
-import aiohttp
-import asyncio
 import requests
 import pandas as pd
 import argparse
 from datetime import datetime
 from pymongo import MongoClient
-import json
-from jsonschema import validate, ValidationError
-
-# Schema for traffic data
-traffic_data_schema = {
-    "type": "object",
-    "properties": {
-        "views": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "timestamp": {"type": "string"},
-                    "count": {"type": "integer"},
-                    "uniques": {"type": "integer"},
-                },
-                "required": ["timestamp", "count", "uniques"],
-            },
-        },
-    },
-    "required": ["views"],
-}
-
-# Schema for clones data
-clones_data_schema = {
-    "type": "object",
-    "properties": {
-        "clones": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "timestamp": {"type": "string"},
-                    "count": {"type": "integer"},
-                    "uniques": {"type": "integer"},
-                },
-                "required": ["timestamp", "count", "uniques"],
-            },
-        },
-        "count": {"type": "integer"},
-        "uniques": {"type": "integer"},
-    },
-    "required": ["clones", "count", "uniques"],
-}
-
-# Schema for referrers data
-referrers_data_schema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "referrer": {"type": "string"},
-            "count": {"type": "integer"},
-            "uniques": {"type": "integer"},
-        },
-        "required": ["referrer", "count", "uniques"],
-    },
-}
-
-# Schema for popular content data
-popular_content_data_schema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-            "count": {"type": "integer"},
-            "uniques": {"type": "integer"},
-        },
-        "required": ["path", "count", "uniques"],
-    },
-}
-
-# Function to validate JSON data against a schema
-def validate_json_data(data, schema):
-    try:
-        validate(instance=data, schema=schema)
-        return True
-    except ValidationError as e:
-        print(f"Validation error: {e.message}")
-        return False
+from openpyxl.styles import Font, Border, Side
 
 # Function to fetch data from GitHub API
 def get_github_data(api_url, token):
@@ -140,13 +58,15 @@ def get_last_recorded_date(df):
         return None
     return pd.to_datetime(df["Date"]).max()
 
-# Function to append new data to the DataFrame
+# Updated function to append new data to the DataFrame
 def append_new_data(old_df, new_data, date_column):
     new_df = pd.DataFrame(new_data)
     if not old_df.empty:
         last_date = get_last_recorded_date(old_df)
         new_df = new_df[pd.to_datetime(new_df[date_column]) > last_date]
-    return pd.concat([old_df, new_df], ignore_index=True)
+    combined_df = pd.concat([old_df, new_df], ignore_index=True)
+    combined_df.sort_values(by=date_column, inplace=True)  # Sort by date
+    return combined_df
 
 # Updated function to add grouped totals with optional referrer or content data handling
 def add_grouped_totals(df, date_column, metrics_columns, is_referrer_or_content=False):
@@ -161,19 +81,34 @@ def add_grouped_totals(df, date_column, metrics_columns, is_referrer_or_content=
         return pd.concat([df, monthly_totals, yearly_totals], ignore_index=True)
     return df
 
-# Function to create a MongoDB client
-def get_mongo_client(connection_string):
-    return MongoClient(connection_string)
-
-# Function to upsert data to MongoDB
+# Updated function to dynamically generate the database name
 def save_to_mongodb(client, database_name, collection_name, data):
     db = client[database_name]
     collection = db[collection_name]
     unique_field = 'Date' if collection_name not in ['ReferringSites', 'PopularContent'] else 'Referring site' if collection_name == 'ReferringSites' else 'Path'
+    
     for item in data:
         query = {unique_field: item[unique_field]}
         update = {"$set": item}
         collection.update_one(query, update, upsert=True)
+
+# Function to create a MongoDB client
+def get_mongo_client(connection_string):
+    return MongoClient(connection_string)
+
+# Function to format Excel header
+def format_excel_header(writer, sheet_name):
+    workbook = writer.book
+    worksheet = workbook[sheet_name]
+    header_font = Font(bold=True)
+    thin_border = Border(left=Side(style='thin'), 
+                         right=Side(style='thin'), 
+                         top=Side(style='thin'), 
+                         bottom=Side(style='thin'))
+    
+    for cell in worksheet['1:1']:  # Assuming the first row is the header
+        cell.font = header_font
+        cell.border = thin_border
 
 # Main function with command-line interface
 def main():
@@ -182,7 +117,7 @@ def main():
     parser.add_argument('--owner', required=True, help='Organization/user name that owns the repository')
     parser.add_argument('--filename', help='Optional: Specify a filename for the Excel output. If not provided, defaults to {owner}-{repo}-traffic-data.xlsx')
     parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
-    parser.add_argument('--mongodb-connection-string', help='Optional: MongoDB connection string to store the data')
+    parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
     args = parser.parse_args()
 
     token = read_token_from_file(args.token_file)
@@ -190,19 +125,13 @@ def main():
         return
 
     base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
-    # Remove dashes and make the database name camelcase
-    database_name = args.repo.replace("-", "").capitalize()
     filename = args.filename or f"{args.owner}-{args.repo}-traffic-data.xlsx"
 
-    # Fetch and process data
+    # Fetch and process data from GitHub API
     views_data = get_github_data(f"{base_url}/traffic/views", token)
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
     referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
     popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
-
-    # Validate fetched data against schemas
-    if not validate_json_data(views_data, traffic_data_schema) or not validate_json_data(clones_data, clones_data_schema) or not validate_json_data(referrers_data, referrers_data_schema) or not validate_json_data(popular_content_data, popular_content_data_schema):
-        return
 
     traffic_df = append_new_data(pd.DataFrame(), process_traffic_data(views_data), 'Date')
     clones_df = append_new_data(pd.DataFrame(), process_clones_data(clones_data), 'Date')
@@ -216,24 +145,29 @@ def main():
     referrers_df = add_grouped_totals(referrers_df, 'FetchedAt', ['Views', 'Unique visitors'], True)
     popular_content_df = add_grouped_totals(popular_content_df, 'FetchedAt', ['Views', 'Unique visitors'], True)
 
-    # Save to Excel
-    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-        traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
-        clones_df.to_excel(writer, sheet_name='Git Clones', index=False)
-        referrers_df.to_excel(writer, sheet_name='Referring Sites', index=False)
-        popular_content_df.to_excel(writer, sheet_name='Popular Content', index=False)
-
-    print(f"Data successfully saved to {filename}")
-
     # Save to MongoDB if connection string is provided
     if args.mongodb_connection_string:
         mongo_client = get_mongo_client(args.mongodb_connection_string)
+        database_name = args.repo  # Use the repository name for the database
         save_to_mongodb(mongo_client, database_name, "TrafficStats", traffic_df.to_dict('records'))
         save_to_mongodb(mongo_client, database_name, "GitClones", clones_df.to_dict('records'))
         save_to_mongodb(mongo_client, database_name, "ReferringSites", referrers_df.to_dict('records'))
         save_to_mongodb(mongo_client, database_name, "PopularContent", popular_content_df.to_dict('records'))
 
-        print("Data also saved to MongoDB")
+        print("Data saved to MongoDB")
+
+    # Save to Excel
+    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
+        format_excel_header(writer, 'Traffic Stats')
+        clones_df.to_excel(writer, sheet_name='Git Clones', index=False)
+        format_excel_header(writer, 'Git Clones')
+        referrers_df.to_excel(writer, sheet_name='Referring Sites', index=False)
+        format_excel_header(writer, 'Referring Sites')
+        popular_content_df.to_excel(writer, sheet_name='Popular Content', index=False)
+        format_excel_header(writer, 'Popular Content')
+
+    print(f"Data successfully saved to {filename}")
 
 if __name__ == "__main__":
     main()

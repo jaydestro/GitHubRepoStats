@@ -1,4 +1,4 @@
 pandas
 requests
 pymongo
-jsonschema
+openpyxl
