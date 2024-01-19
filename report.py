@@ -1,3 +1,4 @@
+import os
 import requests
 import pandas as pd
 import argparse
@@ -15,6 +16,121 @@ def get_github_data(api_url, token):
     else:
         print(f"Failed to fetch data: {response.status_code} - {response.text}")
         return None
+
+def get_stars_data(api_url, token):
+    stars_data = []
+    page = 1
+    while True:
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3.star+json'  # Ensuring we get the 'starred_at' field
+        }
+        response = requests.get(f"{api_url}/stargazers?page={page}&per_page=100", headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                # Process each stargazer entry
+                for entry in data:
+                    starred_at = entry.get('starred_at', '')
+                    user_login = entry.get('user', {}).get('login', 'Unknown')  # Safely access the 'login'
+                    # Append the processed data
+                    stars_data.append({
+                        'starred_at': starred_at,
+                        'login': user_login
+                    })
+                page += 1
+            else:
+                break  # No more pages of data
+        else:
+            print(f"Failed to fetch stars data: {response.status_code} - {response.text}")
+            break
+    return stars_data
+
+
+def process_stars_data(stars_data):
+    processed_data = []
+    for star_info in stars_data:
+        # Assuming star_info is a dictionary with a 'user' key, which is another dictionary
+        # that contains the 'login' key for the username.
+        user_login = star_info['user']['login']  # Directly accessing 'login'
+
+        # Extract the 'starred_at' date and format it
+        starred_at = star_info['starred_at'].split('T')[0]
+
+        processed_data.append({
+            "Date": starred_at,
+            "User": user_login
+        })
+
+    # Append the total number of stars at the end of the processed data
+    total_stars = len(processed_data)
+    processed_data.append({"Date": "Total", "User": "Total", "Total Stars": total_stars})
+
+    return processed_data
+
+
+def get_forks_data(api_url, token):
+    forks_data = []
+    page = 1
+    while True:
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        response = requests.get(f"{api_url}/forks?page={page}&per_page=100", headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                for entry in data:
+                    created_at = entry.get('created_at', '')
+                    user_login = entry.get('owner', {}).get('login', 'Unknown')
+                    forks_data.append({
+                        'created_at': created_at,
+                        'login': user_login
+                    })
+                page += 1
+            else:
+                break
+        else:
+            print(f"Failed to fetch forks data: {response.status_code} - {response.text}")
+            break
+    return forks_data
+
+    
+def process_stars_data(data):
+    processed_data = []
+
+    for item in data:
+        user_login = item.get('login', 'Unknown')  # Extract the 'login' directly from the item
+        starred_at = item.get('starred_at', '').split('T')[0] if 'starred_at' in item else 'Unknown Date'
+        processed_data.append({"Date": starred_at, "User": user_login})
+
+    # Count the total number of stars
+    total_stars = len(processed_data)
+    # Add total stars count as a separate dictionary at the end
+    processed_data.append({"Total Stars": total_stars, "User": "Total"})
+
+    return processed_data
+
+
+def process_forks_data(forks_data):
+    processed_data = []
+    for fork_info in forks_data:
+        user_login = fork_info['login']
+        created_at = fork_info['created_at'].split('T')[0]  # Only the date part
+
+        processed_data.append({
+            "Date": created_at,
+            "User": user_login
+        })
+
+    # Append the total number of forks at the end of the processed data
+    total_forks = len(processed_data)
+    processed_data.append({"Date": "Total", "User": "Total", "Total Forks": total_forks})
+
+    return processed_data
+
+
 
 # Function to process traffic data
 def process_traffic_data(data):
@@ -78,7 +194,6 @@ def append_new_data(mongo_client, database_name, collection_name, new_data, date
     combined_df.sort_values(by=date_column, inplace=True)  # Sort by date
     return combined_df
 
-
 # Updated function to add grouped totals with optional referrer or content data handling
 def add_grouped_totals(df, date_column, metrics_columns):
     if not df.empty:
@@ -94,12 +209,20 @@ def add_grouped_totals(df, date_column, metrics_columns):
         return pd.concat([df, monthly_totals, yearly_totals], ignore_index=True)
     return df
 
-
 # Updated function to dynamically generate the database name
 def save_to_mongodb(client, database_name, collection_name, data):
     db = client[database_name]
     collection = db[collection_name]
-    unique_field = 'Date' if collection_name not in ['ReferringSites', 'PopularContent'] else 'Referring site' if collection_name == 'ReferringSites' else 'Path'
+    
+    # Determine the unique field based on the collection
+    if collection_name in ['TrafficStats', 'GitClones', 'Stars', 'Forks']:
+        unique_field = 'Date'
+    elif collection_name == 'ReferringSites':
+        unique_field = 'Referring site'
+    elif collection_name == 'PopularContent':
+        unique_field = 'Path'
+    else:
+        raise ValueError(f"Unknown collection name: {collection_name}")
 
     for item in data:
         query = {unique_field: item[unique_field]}
@@ -152,12 +275,10 @@ def upload_to_azure_blob(storage_connection_string, container_name, file_path, f
 
     return f"https://{blob_service_client.account_name}.blob.core.windows.net/{container_name}/{file_name}?{sas_token}"
 
-
 def sanitize_container_name(name):
     # Convert to lowercase and replace invalid characters (e.g., spaces) with a dash
     return ''.join(char if char.isalnum() else '-' for char in name).lower()
 
-# Main function with command-line interface
 def main():
     parser = argparse.ArgumentParser(description='GitHub Repository Traffic Data Fetcher')
     parser.add_argument('--repo', required=True, help='Repository name')
@@ -183,10 +304,15 @@ def main():
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
     referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
     popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
+    stars_data = get_stars_data(base_url, token)
+    forks_data = get_forks_data(base_url, token)
 
     # Convert the processed data to DataFrames
     referrers_df = pd.DataFrame(process_referrers_data(referrers_data))
     popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data))
+    stars_df = pd.DataFrame(process_stars_data(stars_data))
+    forks_df = pd.DataFrame(process_forks_data(forks_data))
+
 
     # Process and append the new data
     traffic_df = append_new_data(mongo_client, args.repo, "TrafficStats", process_traffic_data(views_data), 'Date')
@@ -203,11 +329,14 @@ def main():
     save_to_mongodb(mongo_client, args.repo, "GitClones", clones_df.to_dict('records'))
     save_to_mongodb(mongo_client, args.repo, "ReferringSites", referrers_df.to_dict('records'))
     save_to_mongodb(mongo_client, args.repo, "PopularContent", popular_content_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "Stars", stars_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "Forks", forks_df.to_dict('records'))
 
     print("Data saved to MongoDB")
 
     # Save to Excel
-    excel_file_path = f"{filename}"
+    current_directory = os.getcwd()
+    excel_file_path = os.path.join(current_directory, filename)
     with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
         traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
         format_excel_header(writer, 'Traffic Stats')
@@ -217,6 +346,11 @@ def main():
         format_excel_header(writer, 'Referring Sites')
         popular_content_df.to_excel(writer, sheet_name='Popular Content', index=False)
         format_excel_header(writer, 'Popular Content')
+        stars_df.to_excel(writer, sheet_name='Stars', index=False)
+        format_excel_header(writer, 'Stars')
+        forks_df.to_excel(writer, sheet_name='Forks', index=False)
+        format_excel_header(writer, 'Forks')
+
     print(f"Excel file saved locally at: {excel_file_path}")
 
     # Upload to Azure Blob if connection string is provided
@@ -226,5 +360,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-    
+   
