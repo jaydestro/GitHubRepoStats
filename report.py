@@ -5,7 +5,9 @@ import argparse
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 from openpyxl.styles import Font, Border, Side
-from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
+from azure.storage.blob import BlobServiceClient, BlobSasPermissions, \
+    generate_blob_sas
+
 
 # Function to fetch data from GitHub API
 def get_github_data(api_url, token):
@@ -14,8 +16,10 @@ def get_github_data(api_url, token):
     if response.status_code == 200:
         return response.json()
     else:
-        print(f"Failed to fetch data: {response.status_code} - {response.text}")
+        error_message = f"Failed to fetch data: {response.status_code} - {response.text}"
+        print(error_message)
         return None
+
 
 def get_stars_data(api_url, token):
     stars_data = []
@@ -48,23 +52,23 @@ def get_stars_data(api_url, token):
 
 
 def process_stars_data(stars_data):
-    processed_data = []
-    for star_info in stars_data:
-        # Assuming star_info is a dictionary with a 'user' key, which is another dictionary
-        # that contains the 'login' key for the username.
-        user_login = star_info['user']['login']  # Directly accessing 'login'
+    # Create a dictionary to hold the cumulative count
+    cumulative_count = {}
+    total_stars = 0
 
-        # Extract the 'starred_at' date and format it
-        starred_at = star_info['starred_at'].split('T')[0]
+    # Sort the stars data by 'starred_at'
+    sorted_data = sorted(stars_data, key=lambda x: x['starred_at'])
 
-        processed_data.append({
-            "Date": starred_at,
-            "User": user_login
-        })
+    for star_info in sorted_data:
+        # Extract and format the date
+        date = star_info['starred_at'].split('T')[0]
+        # Increment the total count
+        total_stars += 1
+        # Store the cumulative count for this date
+        cumulative_count[date] = total_stars
 
-    # Append the total number of stars at the end of the processed data
-    total_stars = len(processed_data)
-    processed_data.append({"Date": "Total", "User": "Total", "Total Stars": total_stars})
+    # Convert the dictionary to a list of dictionaries
+    processed_data = [{"Date": date, "Total Stars": count} for date, count in cumulative_count.items()]
 
     return processed_data
 
@@ -96,40 +100,27 @@ def get_forks_data(api_url, token):
             break
     return forks_data
 
-    
-def process_stars_data(data):
-    processed_data = []
-
-    for item in data:
-        user_login = item.get('login', 'Unknown')  # Extract the 'login' directly from the item
-        starred_at = item.get('starred_at', '').split('T')[0] if 'starred_at' in item else 'Unknown Date'
-        processed_data.append({"Date": starred_at, "User": user_login})
-
-    # Count the total number of stars
-    total_stars = len(processed_data)
-    # Add total stars count as a separate dictionary at the end
-    processed_data.append({"Total Stars": total_stars, "User": "Total"})
-
-    return processed_data
-
 
 def process_forks_data(forks_data):
-    processed_data = []
-    for fork_info in forks_data:
-        user_login = fork_info['login']
-        created_at = fork_info['created_at'].split('T')[0]  # Only the date part
+    # Create a dictionary to hold the cumulative count
+    cumulative_count = {}
+    total_forks = 0
 
-        processed_data.append({
-            "Date": created_at,
-            "User": user_login
-        })
+    # Sort the forks data by 'created_at'
+    sorted_data = sorted(forks_data, key=lambda x: x['created_at'])
 
-    # Append the total number of forks at the end of the processed data
-    total_forks = len(processed_data)
-    processed_data.append({"Date": "Total", "User": "Total", "Total Forks": total_forks})
+    for fork_info in sorted_data:
+        # Extract and format the date
+        date = fork_info['created_at'].split('T')[0]
+        # Increment the total count
+        total_forks += 1
+        # Store the cumulative count for this date
+        cumulative_count[date] = total_forks
+
+    # Convert the dictionary to a list of dictionaries
+    processed_data = [{"Date": date, "Total Forks": count} for date, count in cumulative_count.items()]
 
     return processed_data
-
 
 
 # Function to process traffic data
@@ -138,11 +129,13 @@ def process_traffic_data(data):
              "Views": item['count'],
              "Unique visitors": item['uniques']} for item in data['views']]
 
+
 # Function to process clones data
 def process_clones_data(data):
     return [{"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date(),
              "Clones": item['count'],
              "Unique cloners": item['uniques']} for item in data['clones']]
+
 
 # Function to process referrers data
 def process_referrers_data(data):
@@ -152,6 +145,7 @@ def process_referrers_data(data):
              "Unique visitors": item['uniques'],
              "FetchedAt": timestamp} for item in data]
 
+
 # Function to process popular content data
 def process_popular_content_data(data):
     timestamp = datetime.now()
@@ -159,6 +153,7 @@ def process_popular_content_data(data):
              "Views": item['count'],
              "Unique visitors": item['uniques'],
              "FetchedAt": timestamp} for item in data]
+
 
 # Function to read the Personal Access Token from a file
 def read_token_from_file(file_path):
@@ -169,11 +164,13 @@ def read_token_from_file(file_path):
         print(f"Error reading token file: {e}")
         return None
 
+
 # Function to get the last recorded date from a DataFrame
 def get_last_recorded_date(df):
     if df.empty or "Date" not in df.columns:
         return None
     return pd.to_datetime(df["Date"]).max()
+
 
 # Function to fetch all existing data from MongoDB
 def fetch_all_data_from_mongodb(client, database_name, collection_name):
@@ -181,6 +178,7 @@ def fetch_all_data_from_mongodb(client, database_name, collection_name):
     collection = db[collection_name]
     data = list(collection.find({}, {'_id': 0}))  # Exclude the Mongo-generated ID field
     return pd.DataFrame(data)
+
 
 # Updated function to append new data to the DataFrame
 def append_new_data(mongo_client, database_name, collection_name, new_data, date_column):
@@ -194,26 +192,12 @@ def append_new_data(mongo_client, database_name, collection_name, new_data, date
     combined_df.sort_values(by=date_column, inplace=True)  # Sort by date
     return combined_df
 
-# Updated function to add grouped totals with optional referrer or content data handling
-def add_grouped_totals(df, date_column, metrics_columns):
-    if not df.empty:
-        # Ensure handling for referrer or content data
-        if 'FetchedAt' in df.columns:
-            date_column = 'FetchedAt'
-        
-        df[date_column] = pd.to_datetime(df[date_column])
-        monthly_totals = df.groupby(df[date_column].dt.to_period("M"))[metrics_columns].sum().reset_index()
-        monthly_totals[date_column] = monthly_totals[date_column].dt.strftime('Month %Y-%m')
-        yearly_totals = df.groupby(df[date_column].dt.to_period("Y"))[metrics_columns].sum().reset_index()
-        yearly_totals[date_column] = yearly_totals[date_column].dt.strftime('Year %Y')
-        return pd.concat([df, monthly_totals, yearly_totals], ignore_index=True)
-    return df
 
 # Updated function to dynamically generate the database name
 def save_to_mongodb(client, database_name, collection_name, data):
     db = client[database_name]
     collection = db[collection_name]
-    
+
     # Determine the unique field based on the collection
     if collection_name in ['TrafficStats', 'GitClones', 'Stars', 'Forks']:
         unique_field = 'Date'
@@ -229,9 +213,11 @@ def save_to_mongodb(client, database_name, collection_name, data):
         update = {"$set": item}
         collection.update_one(query, update, upsert=True)
 
+
 # Function to create a MongoDB client
 def get_mongo_client(connection_string):
     return MongoClient(connection_string)
+
 
 # Function to format Excel header
 def format_excel_header(writer, sheet_name):
@@ -246,6 +232,7 @@ def format_excel_header(writer, sheet_name):
     for cell in worksheet['1:1']:  # Assuming the first row is the header
         cell.font = header_font
         cell.border = thin_border
+
 
 # Function to upload file to Azure Blob Storage and get temporary URL
 def upload_to_azure_blob(storage_connection_string, container_name, file_path, file_name):
@@ -275,9 +262,11 @@ def upload_to_azure_blob(storage_connection_string, container_name, file_path, f
 
     return f"https://{blob_service_client.account_name}.blob.core.windows.net/{container_name}/{file_name}?{sas_token}"
 
+
 def sanitize_container_name(name):
     # Convert to lowercase and replace invalid characters (e.g., spaces) with a dash
     return ''.join(char if char.isalnum() else '-' for char in name).lower()
+
 
 def main():
     parser = argparse.ArgumentParser(description='GitHub Repository Traffic Data Fetcher')
@@ -298,7 +287,6 @@ def main():
 
     # Create MongoDB client
     mongo_client = get_mongo_client(args.mongodb_connection_string)
-
     # Fetch and process data from GitHub API
     views_data = get_github_data(f"{base_url}/traffic/views", token)
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
@@ -306,24 +294,14 @@ def main():
     popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
     stars_data = get_stars_data(base_url, token)
     forks_data = get_forks_data(base_url, token)
-
     # Convert the processed data to DataFrames
     referrers_df = pd.DataFrame(process_referrers_data(referrers_data))
     popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data))
     stars_df = pd.DataFrame(process_stars_data(stars_data))
     forks_df = pd.DataFrame(process_forks_data(forks_data))
-
-
     # Process and append the new data
     traffic_df = append_new_data(mongo_client, args.repo, "TrafficStats", process_traffic_data(views_data), 'Date')
     clones_df = append_new_data(mongo_client, args.repo, "GitClones", process_clones_data(clones_data), 'Date')
-
-    # Apply add_grouped_totals to DataFrames
-    traffic_df = add_grouped_totals(traffic_df, 'Date', ['Views', 'Unique visitors'])
-    clones_df = add_grouped_totals(clones_df, 'Date', ['Clones', 'Unique cloners'])
-    referrers_df = add_grouped_totals(referrers_df, 'FetchedAt', ['Views', 'Unique visitors'])
-    popular_content_df = add_grouped_totals(popular_content_df, 'FetchedAt', ['Views', 'Unique visitors'])
-
     # Save to MongoDB
     save_to_mongodb(mongo_client, args.repo, "TrafficStats", traffic_df.to_dict('records'))
     save_to_mongodb(mongo_client, args.repo, "GitClones", clones_df.to_dict('records'))
@@ -358,6 +336,6 @@ def main():
         azure_blob_url = upload_to_azure_blob(args.azure_storage_connection_string, sanitize_container_name(args.repo), excel_file_path, filename)
         print(f"Excel file uploaded to Azure Blob Storage. Temporary download link (valid for 24 hours): {azure_blob_url}")
 
+
 if __name__ == "__main__":
     main()
-   
