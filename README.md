@@ -80,12 +80,6 @@ The script accepts the following command-line arguments:
 
 Replace `<repository_name>`, `<owner_name>`, `<optional_filename.xlsx>`, and `<path_to_token_file>`, `<your_mongodb_connection_string>`, `your_azure_blob_storage_connection_string` with your repository's name, repository owner's name, an optional filename for the Excel report, your MongoDB database connection string, and the path to your token file, and your optional storage connection string, respectively.
 
-Example command:
-
-   ```bash
-   python report.py --repo your-repository --owner your-username --token-file path/to/token.txt
-   ```
-
 ## Data Output
 
 ![Example Traffic Stats Excel Sheet](./images/example_traffic_sheet.jpg)
