@@ -99,20 +99,25 @@ The script processes and outputs data in the following categories:
    - Data includes total views, unique visitors, and timestamps for each record.
    - Aggregated monthly and yearly totals are also provided for comprehensive analysis.
 
-2. **Git Clones**:
+1. **Git Clones**:
    - Provides clone counts and unique cloners of the repository.
    - Each record includes the total number of clones and unique cloners, along with the corresponding date.
    - Like traffic stats, this category also includes month-to-month and year-to-year aggregated data.
 
-3. **Referring Sites**:
+1. **Referring Sites**:
    - Lists top referring sites with their views and unique visitors.
    - Each entry is timestamped to indicate the exact time of data retrieval.
    - The data is aggregated monthly and yearly to observe trends and changes over time.
 
-4. **Popular Content**:
+1. **Popular Content**:
    - Highlights the most visited paths in the repository.
    - Records include path details, view counts, unique visitors, and a timestamp.
    - Aggregated data on a monthly and yearly basis is provided for in-depth analysis.
+
+1. **Stars and Forks:**
+   - Tracks the number of stars and forks the repository receives over time.
+   - Each star or fork is recorded with its respective date, allowing for a detailed view of the repository's growing popularity and community engagement.
+   - Data is aggregated to show monthly and yearly trends, providing insights into the repository's long-term appeal and reach.
 
 Each category is available in a structured format and is saved into separate sheets in an Excel file. Additionally, each category is stored as a collection in the MongoDB database, providing persistent storage and enabling advanced querying capabilities. MongoDB integration is a core feature of this tool, ensuring comprehensive data management and analysis. The option to store the Excel file in Azure Blob Storage adds another layer of functionality, allowing for secure and convenient sharing of the report.
 
