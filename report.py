@@ -311,6 +311,13 @@ def sanitize_container_name(name):
 def get_mongo_client(connection_string):
     return MongoClient(connection_string)
 
+# Function to save data in JSON format
+def save_as_json(dataframes, base_filename):
+    for name, df in dataframes.items():
+        json_file_path = f"{base_filename}-{name}.json"
+        df.to_json(json_file_path, orient='records', date_format='iso')
+        print(f"JSON file saved locally at: {json_file_path}")
+
 
 # Main function: sets up CLI arguments and executes script logic.
 def main():
@@ -318,140 +325,112 @@ def main():
         description='GitHub Repository Traffic Data Fetcher'
     )
     parser.add_argument('--repo', required=True, help='Repository name')
-    parser.add_argument('--owner', required=True,
-                        help='Organization/user name that owns the repository')
-    parser.add_argument(
-        '--filename',
-        help=('Optional: Specify a filename for the Excel output. '
-              'If not provided, defaults to {owner}-{repo}-traffic-data.xlsx')
-    )
-    parser.add_argument(
-        '--token-file', required=True,
-        help='Path to a text file containing the GitHub Personal Access Token'
-    )
-    parser.add_argument(
-        '--mongodb-connection-string', required=True,
-        help='MongoDB connection string to store and retrieve the data'
-    )
-    parser.add_argument(
-        '--azure-storage-connection-string',
-        help=('Optional: Azure Blob Storage connection string '
-              'for storing the Excel file')
-    )
+    parser.add_argument('--owner', required=True, help='Organization/user name that owns the repository')
+    parser.add_argument('--output-format', choices=['excel', 'json'], default='excel', help='Output format for the data (excel or json)')
+    parser.add_argument('--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data.xlsx'))
+    parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
+    parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
+    parser.add_argument('--azure-storage-connection-string', help=('Optional: Azure Blob Storage connection string for storing the output file'))
     args = parser.parse_args()
 
     token = read_token_from_file(args.token_file)
     if not token:
         return
 
-    base_url = (
-        f"https://api.github.com/repos/{args.owner}/{args.repo}"
-    )
-    filename = (
-        args.filename or f"{args.owner}-{args.repo}-traffic-data.xlsx"
-    )
+    base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
+    filename = args.filename or f"{args.owner}-{args.repo}-traffic-data"
+    base_filename = os.path.splitext(filename)[0]  # Filename without extension
 
     # Create MongoDB client
     mongo_client = get_mongo_client(args.mongodb_connection_string)
 
     # Fetch and process data from GitHub API
-    views_data = get_github_data(
-        f"{base_url}/traffic/views", token
-    )
-    clones_data = get_github_data(
-        f"{base_url}/traffic/clones", token
-    )
-    referrers_data = get_github_data(
-        f"{base_url}/traffic/popular/referrers", token
-    )
-    popular_content_data = get_github_data(
-        f"{base_url}/traffic/popular/paths", token
-    )
+    views_data = get_github_data(f"{base_url}/traffic/views", token)
+    clones_data = get_github_data(f"{base_url}/traffic/clones", token)
+    referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
+    popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
     stars_data = get_stars_data(base_url, token)
     forks_data = get_forks_data(base_url, token)
 
     # Convert the processed data to DataFrames
     referrers_df = pd.DataFrame(process_referrers_data(referrers_data))
-    popular_content_df = pd.DataFrame(
-        process_popular_content_data(popular_content_data)
-    )
+    popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data))
     stars_df = pd.DataFrame(process_stars_data(stars_data))
     forks_df = pd.DataFrame(process_forks_data(forks_data))
 
     # Process and append the new data
-    traffic_df = append_new_data(
-        mongo_client, args.repo, "TrafficStats",
-        process_traffic_data(views_data), 'Date'
-    )
-    clones_df = append_new_data(
-        mongo_client, args.repo, "GitClones",
-        process_clones_data(clones_data), 'Date'
-    )
+    traffic_df = append_new_data(mongo_client, args.repo, "TrafficStats", process_traffic_data(views_data), 'Date')
+    clones_df = append_new_data(mongo_client, args.repo, "GitClones", process_clones_data(clones_data), 'Date')
 
     # Save to MongoDB
-    save_to_mongodb(
-        mongo_client, args.repo, "TrafficStats",
-        traffic_df.to_dict('records')
-    )
-    save_to_mongodb(
-        mongo_client, args.repo, "GitClones",
-        clones_df.to_dict('records')
-    )
-    save_to_mongodb(
-        mongo_client, args.repo, "ReferringSites",
-        referrers_df.to_dict('records')
-    )
-    save_to_mongodb(
-        mongo_client, args.repo, "PopularContent",
-        popular_content_df.to_dict('records')
-    )
-    save_to_mongodb(
-        mongo_client, args.repo, "Stars",
-        stars_df.to_dict('records')
-    )
-    save_to_mongodb(
-        mongo_client, args.repo, "Forks",
-        forks_df.to_dict('records')
-    )
+    save_to_mongodb(mongo_client, args.repo, "TrafficStats", traffic_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "GitClones", clones_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "ReferringSites", referrers_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "PopularContent", popular_content_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "Stars", stars_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "Forks", forks_df.to_dict('records'))
 
     print("Data saved to MongoDB")
 
-    # Save to Excel
-    current_directory = os.getcwd()
-    excel_file_path = os.path.join(current_directory, filename)
-    with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-        traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
-        format_excel_header(writer, 'Traffic Stats')
-        clones_df.to_excel(writer, sheet_name='Git Clones', index=False)
-        format_excel_header(writer, 'Git Clones')
-        referrers_df.to_excel(
-            writer, sheet_name='Referring Sites', index=False
-        )
-        format_excel_header(writer, 'Referring Sites')
-        popular_content_df.to_excel(
-            writer, sheet_name='Popular Content', index=False
-        )
-        format_excel_header(writer, 'Popular Content')
-        stars_df.to_excel(writer, sheet_name='Stars', index=False)
-        format_excel_header(writer, 'Stars')
-        forks_df.to_excel(writer, sheet_name='Forks', index=False)
-        format_excel_header(writer, 'Forks')
+    # Determine output format and save data
+    output_format = args.output_format
+    if output_format == 'excel':
+        excel_file_path = f"{base_filename}.xlsx"
+        with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+            traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
+            format_excel_header(writer, 'Traffic Stats')
+            clones_df.to_excel(writer, sheet_name='Git Clones', index=False)
+            format_excel_header(writer, 'Git Clones')
+            referrers_df.to_excel(writer, sheet_name='Referring Sites', index=False)
+            format_excel_header(writer, 'Referring Sites')
+            popular_content_df.to_excel(writer, sheet_name='Popular Content', index=False)
+            format_excel_header(writer, 'Popular Content')
+            stars_df.to_excel(writer, sheet_name='Stars', index=False)
+            format_excel_header(writer, 'Stars')
+            forks_df.to_excel(writer, sheet_name='Forks', index=False)
+            format_excel_header(writer, 'Forks')
 
-    print(f"Excel file saved locally at: {excel_file_path}")
+        print(f"Excel file saved locally at: {excel_file_path}")
+        file_path = excel_file_path
+        file_type = 'xlsx'
+    elif output_format == 'json':
+        dataframes = {
+            'TrafficStats': traffic_df,
+            'GitClones': clones_df,
+            'ReferringSites': referrers_df,
+            'PopularContent': popular_content_df,
+            'Stars': stars_df,
+            'Forks': forks_df
+        }
+        for df_name, df in dataframes.items():
+            json_file_path = f"{base_filename}-{df_name}.json"
+            df.to_json(json_file_path, orient='records', date_format='iso')
+            print(f"JSON file saved locally at: {json_file_path}")
+            if args.azure_storage_connection_string:
+                container_name = sanitize_container_name(args.repo)
+                azure_blob_url = upload_to_azure_blob(
+                    args.azure_storage_connection_string,
+                    container_name,
+                    json_file_path, f"{df_name}.json"
+                )
+                print(
+                    f"{df_name} JSON file uploaded to Azure Blob Storage. "
+                    "Temporary download link (valid for 24 hours): "
+                    f"{azure_blob_url}"
+                )
 
-    # Upload to Azure Blob if connection string is provided
-    if args.azure_storage_connection_string:
+    # Upload to Azure Blob if connection string is provided and format is excel
+    if args.azure_storage_connection_string and output_format == 'excel':
         azure_blob_url = upload_to_azure_blob(
             args.azure_storage_connection_string,
             sanitize_container_name(args.repo),
-            excel_file_path, filename
+            file_path, f"{args.repo}.{file_type}"
         )
         print(
             "Excel file uploaded to Azure Blob Storage. "
             "Temporary download link (valid for 24 hours): "
             f"{azure_blob_url}"
         )
-
 
 if __name__ == "__main__":
     main()

@@ -67,6 +67,7 @@ The script accepts the following command-line arguments:
 - `--token-file`: The path to the text file containing your GitHub Personal Access Token.
 - `--mongodb-connection-string` (optional): The MongoDB connection string to store the data. Omit this flag if you do not wish to use MongoDB.
 - `--azure-storage-connection-string` (optional): The Azure Blob Storage connection string for storing the Excel file. Omit this flag if you do not want to use Azure Blob Storage.
+- `--output-format` (optional): Specify the output format for the data (`excel` or `json`). Defaults to `excel`.
 
 ## Usage
 
@@ -75,10 +76,10 @@ The script accepts the following command-line arguments:
 1. Run the script using the command:
 
    ```bash
-   python script_name.py --repo <repository_name> --owner <owner_name> --token-file <path_to_token_file> [--filename <optional_filename.xlsx>] [--mongodb-connection-string <your_mongodb_connection_string>] --azure-storage-connection-string <your_azure_blob_storage_connection_string>
+    python script_name.py --repo <repository_name> --owner <owner_name> --token-file <path_to_token_file> [--filename <optional_filename>] [--output-format <excel/json>] [--mongodb-connection-string <your_mongodb_connection_string>] [--azure-storage-connection-string <your_azure_blob_storage_connection_string>]
    ```
 
-Replace `<repository_name>`, `<owner_name>`, `<optional_filename.xlsx>`, and `<path_to_token_file>`, `<your_mongodb_connection_string>`, `your_azure_blob_storage_connection_string` with your repository's name, repository owner's name, an optional filename for the Excel report, your MongoDB database connection string, and the path to your token file, and your optional storage connection string, respectively.
+Replace `<repository_name>`, `<owner_name>`, `<optional_filename.xlsx>`, and `<path_to_token_file>`, `<your_mongodb_connection_string>`, `--output-format <excel/json>`, and `<your_azure_blob_storage_connection_string>` with your repository's name, repository owner's name, an optional filename for the Excel report, your MongoDB database connection string, and the path to your token file, and your optional storage connection string, respectively.
 
 ## Data Output
 
