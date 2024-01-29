@@ -67,7 +67,7 @@ The script accepts the following command-line arguments:
 - `--token-file`: The path to the text file containing your GitHub Personal Access Token.
 - `--mongodb-connection-string` (optional): The MongoDB connection string to store the data. Omit this flag if you do not wish to use MongoDB.
 - `--azure-storage-connection-string` (optional): The Azure Blob Storage connection string for storing the Excel file. Omit this flag if you do not want to use Azure Blob Storage.
-- `--output-format` (optional): Specify the output format for the data (`excel` or `json`). Defaults to `excel`.  Output files are stored in the `output` directory.
+- `--output-format` (optional): Specify the output format for the data (`excel`, `json`, `all`). Defaults to `excel`.  Output files are stored in the `output` directory. Using the `all` flag will save both formats in a zip file.
 
 ## Usage
 
