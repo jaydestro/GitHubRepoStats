@@ -137,7 +137,7 @@ def process_forks_data(forks_data):
 # with date, views, and unique visitors.
 def process_traffic_data(data):
     return [
-        {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date(),
+        {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
          "Views": item['count'],
          "Unique visitors": item['uniques']}
         for item in data['views']
@@ -148,7 +148,7 @@ def process_traffic_data(data):
 # with date, count, and unique cloners.
 def process_clones_data(data):
     return [
-        {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date(),
+        {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
          "Clones": item['count'],
          "Unique cloners": item['uniques']}
         for item in data['clones']
@@ -207,22 +207,29 @@ def fetch_all_data_from_mongodb(client, database_name, collection_name):
 
 
 # Appends new data to DataFrame, avoiding duplicates, and sorts by date.
-def append_new_data(mongo_client, database_name, collection_name,
-                    new_data, date_column):
-    old_df = fetch_all_data_from_mongodb(
-        mongo_client, database_name, collection_name
-    )
+def append_new_data(mongo_client, database_name, collection_name, new_data, date_column):
+    # Fetch old data from MongoDB
+    old_df = fetch_all_data_from_mongodb(mongo_client, database_name, collection_name)
+
+    # Convert new data to DataFrame
     new_df = pd.DataFrame(new_data)
-    new_df = new_df[
-        new_df[date_column].apply(lambda x: isinstance(x, datetime))
-    ]
-    old_df = old_df[
-        old_df[date_column].apply(lambda x: isinstance(x, datetime))
-    ]
+
+    # Ensure consistent date format for new and old data
+    new_df[date_column] = pd.to_datetime(new_df[date_column], errors='coerce')
+    old_df[date_column] = pd.to_datetime(old_df[date_column], errors='coerce')
+
+    # Filter out invalid dates
+    new_df = new_df.dropna(subset=[date_column])
+    old_df = old_df.dropna(subset=[date_column])
+
+
+    # Combine old and new data
     combined_df = pd.concat([old_df, new_df], ignore_index=True)
-    combined_df.drop_duplicates(subset=[date_column],
-                                keep='last', inplace=True)
+
+    # Drop duplicates and sort by date
+    combined_df.drop_duplicates(subset=[date_column], keep='last', inplace=True)
     combined_df.sort_values(by=date_column, inplace=True)
+
     return combined_df
 
 
