@@ -318,6 +318,10 @@ def save_as_json(dataframes, base_filename):
         df.to_json(json_file_path, orient='records', date_format='iso')
         print(f"JSON file saved locally at: {json_file_path}")
 
+def ensure_output_directory(directory_name="output"):
+    if not os.path.exists(directory_name):
+        os.makedirs(directory_name)
+
 
 # Main function: sets up CLI arguments and executes script logic.
 def main():
@@ -372,10 +376,15 @@ def main():
 
     print("Data saved to MongoDB")
 
+    # Ensure the output directory exists
+    output_directory = "output"
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
     # Determine output format and save data
     output_format = args.output_format
     if output_format == 'excel':
-        excel_file_path = f"{base_filename}.xlsx"
+        excel_file_path = os.path.join(output_directory, f"{base_filename}.xlsx")
         with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
             traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
             format_excel_header(writer, 'Traffic Stats')
@@ -389,7 +398,6 @@ def main():
             format_excel_header(writer, 'Stars')
             forks_df.to_excel(writer, sheet_name='Forks', index=False)
             format_excel_header(writer, 'Forks')
-
         print(f"Excel file saved locally at: {excel_file_path}")
         file_path = excel_file_path
         file_type = 'xlsx'
@@ -403,7 +411,7 @@ def main():
             'Forks': forks_df
         }
         for df_name, df in dataframes.items():
-            json_file_path = f"{base_filename}-{df_name}.json"
+            json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
             df.to_json(json_file_path, orient='records', date_format='iso')
             print(f"JSON file saved locally at: {json_file_path}")
             if args.azure_storage_connection_string:
