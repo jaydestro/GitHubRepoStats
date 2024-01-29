@@ -2,6 +2,7 @@ import os
 import requests
 import pandas as pd
 import argparse
+import zipfile
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 from openpyxl.styles import Font, Border, Side
@@ -322,6 +323,16 @@ def ensure_output_directory(directory_name="output"):
     if not os.path.exists(directory_name):
         os.makedirs(directory_name)
 
+def create_zip_file(output_directory, base_filename, include_excel, json_filenames):
+    zip_filename = os.path.join(output_directory, f"{base_filename}.zip")
+    with zipfile.ZipFile(zip_filename, 'w') as zipf:
+        if include_excel:
+            excel_filename = os.path.join(output_directory, f"{base_filename}.xlsx")
+            zipf.write(excel_filename, os.path.basename(excel_filename))
+        for json_filename in json_filenames:
+            zipf.write(json_filename, os.path.basename(json_filename))
+    return zip_filename
+
 
 # Main function: sets up CLI arguments and executes script logic.
 def main():
@@ -330,8 +341,8 @@ def main():
     )
     parser.add_argument('--repo', required=True, help='Repository name')
     parser.add_argument('--owner', required=True, help='Organization/user name that owns the repository')
-    parser.add_argument('--output-format', choices=['excel', 'json'], default='excel', help='Output format for the data (excel or json)')
-    parser.add_argument('--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data.xlsx'))
+    parser.add_argument('--output-format', choices=['excel', 'json', 'all'], default='excel', help='Output format for the data (excel, json, or all)')
+    parser.add_argument('--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data'))
     parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
     parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
     parser.add_argument('--azure-storage-connection-string', help=('Optional: Azure Blob Storage connection string for storing the output file'))
@@ -343,7 +354,7 @@ def main():
 
     base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
     filename = args.filename or f"{args.owner}-{args.repo}-traffic-data"
-    base_filename = os.path.splitext(filename)[0]  # Filename without extension
+    base_filename = os.path.splitext(filename)[0]
 
     # Create MongoDB client
     mongo_client = get_mongo_client(args.mongodb_connection_string)
@@ -381,9 +392,18 @@ def main():
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
-    # Determine output format and save data
     output_format = args.output_format
-    if output_format == 'excel':
+    dataframes = {
+        'TrafficStats': traffic_df,
+        'GitClones': clones_df,
+        'ReferringSites': referrers_df,
+        'PopularContent': popular_content_df,
+        'Stars': stars_df,
+        'Forks': forks_df
+    }
+
+    # Save in Excel format
+    if output_format in ['excel', 'all']:
         excel_file_path = os.path.join(output_directory, f"{base_filename}.xlsx")
         with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
             traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
@@ -399,46 +419,44 @@ def main():
             forks_df.to_excel(writer, sheet_name='Forks', index=False)
             format_excel_header(writer, 'Forks')
         print(f"Excel file saved locally at: {excel_file_path}")
-        file_path = excel_file_path
-        file_type = 'xlsx'
-    elif output_format == 'json':
-        dataframes = {
-            'TrafficStats': traffic_df,
-            'GitClones': clones_df,
-            'ReferringSites': referrers_df,
-            'PopularContent': popular_content_df,
-            'Stars': stars_df,
-            'Forks': forks_df
-        }
+
+    # Save in JSON format
+    if output_format in ['json', 'all']:
+        json_file_paths = []
         for df_name, df in dataframes.items():
             json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
             df.to_json(json_file_path, orient='records', date_format='iso')
+            json_file_paths.append(json_file_path)
             print(f"JSON file saved locally at: {json_file_path}")
-            if args.azure_storage_connection_string:
-                container_name = sanitize_container_name(args.repo)
-                azure_blob_url = upload_to_azure_blob(
-                    args.azure_storage_connection_string,
-                    container_name,
-                    json_file_path, f"{df_name}.json"
-                )
-                print(
-                    f"{df_name} JSON file uploaded to Azure Blob Storage. "
-                    "Temporary download link (valid for 24 hours): "
-                    f"{azure_blob_url}"
-                )
 
-    # Upload to Azure Blob if connection string is provided and format is excel
-    if args.azure_storage_connection_string and output_format == 'excel':
-        azure_blob_url = upload_to_azure_blob(
-            args.azure_storage_connection_string,
-            sanitize_container_name(args.repo),
-            file_path, f"{args.repo}.{file_type}"
-        )
-        print(
-            "Excel file uploaded to Azure Blob Storage. "
-            "Temporary download link (valid for 24 hours): "
-            f"{azure_blob_url}"
-        )
+    # Upload to Azure Blob Storage
+    if args.azure_storage_connection_string:
+        container_name = sanitize_container_name(args.repo)
+        if output_format in ['json', 'all']:
+            # Create and upload a zip file containing the JSON (and possibly Excel) files
+            zip_filename = f"{base_filename}.zip"
+            with zipfile.ZipFile(os.path.join(output_directory, zip_filename), 'w') as zipf:
+                for json_file in json_file_paths:
+                    zipf.write(json_file, os.path.basename(json_file))
+                if output_format == 'all':
+                    zipf.write(excel_file_path, os.path.basename(excel_file_path))
+            azure_blob_url = upload_to_azure_blob(
+                args.azure_storage_connection_string,
+                container_name,
+                os.path.join(output_directory, zip_filename), zip_filename
+            )
+            print(f"Zipped file uploaded to Azure Blob Storage. Temporary download link (valid for 24 hours): {azure_blob_url}")
+        elif output_format == 'excel':
+            azure_blob_url = upload_to_azure_blob(
+                args.azure_storage_connection_string,
+                container_name,
+                excel_file_path, os.path.basename(excel_file_path)
+            )
+            print(
+                "Excel file uploaded to Azure Blob Storage. "
+                "Temporary download link (valid for 24 hours): "
+                f"{azure_blob_url}"
+            )
 
 if __name__ == "__main__":
     main()
