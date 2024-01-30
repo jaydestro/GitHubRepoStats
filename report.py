@@ -8,6 +8,7 @@ from pymongo import MongoClient
 from openpyxl.styles import Font, Border, Side
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, \
     generate_blob_sas
+from azure.core.exceptions import ResourceExistsError
 
 
 # Retrieves data from GitHub API using a URL and token.
@@ -210,7 +211,8 @@ def fetch_all_data_from_mongodb(client, database_name, collection_name):
 # Appends new data to DataFrame, avoiding duplicates, and sorts by date.
 def append_new_data(mongo_client, database_name, collection_name, new_data, date_column):
     # Fetch old data from MongoDB
-    old_df = fetch_all_data_from_mongodb(mongo_client, database_name, collection_name)
+    old_df = fetch_all_data_from_mongodb(
+        mongo_client, database_name, collection_name)
 
     # Convert new data to DataFrame
     new_df = pd.DataFrame(new_data)
@@ -223,12 +225,12 @@ def append_new_data(mongo_client, database_name, collection_name, new_data, date
     new_df = new_df.dropna(subset=[date_column])
     old_df = old_df.dropna(subset=[date_column])
 
-
     # Combine old and new data
     combined_df = pd.concat([old_df, new_df], ignore_index=True)
 
     # Drop duplicates and sort by date
-    combined_df.drop_duplicates(subset=[date_column], keep='last', inplace=True)
+    combined_df.drop_duplicates(
+        subset=[date_column], keep='last', inplace=True)
     combined_df.sort_values(by=date_column, inplace=True)
 
     return combined_df
@@ -270,37 +272,37 @@ def format_excel_header(writer, sheet_name):
 
 
 # Uploads file to Azure Blob Storage and generates temporary URL.
-def upload_to_azure_blob(storage_connection_string, container_name,
-                         file_path, file_name):
+def upload_to_azure_blob(storage_connection_string, container_name, file_path, file_name, directory=''):
     blob_service_client = BlobServiceClient.from_connection_string(
-                          storage_connection_string)
+        storage_connection_string)
     container_client = blob_service_client.get_container_client(container_name)
 
     try:
         container_client.create_container()
+    except ResourceExistsError:
+        print(f"Container '{container_name}' already exists.")
     except Exception as e:
-        print(f"Container already exists or error: {e}")
+        print(f"Error creating container: {e}")
+        return
+
+    # Prepend the directory to the file name if provided
+    blob_name = f"{directory}{file_name}" if directory else file_name
 
     blob_client = blob_service_client.get_blob_client(
-        container=container_name, blob=file_name
-    )
+        container=container_name, blob=blob_name)
     with open(file_path, "rb") as data:
         blob_client.upload_blob(data, overwrite=True)
 
     sas_token = generate_blob_sas(
         account_name=blob_service_client.account_name,
         container_name=container_name,
-        blob_name=file_name,
+        blob_name=blob_name,
         account_key=blob_service_client.credential.account_key,
         permission=BlobSasPermissions(read=True),
         expiry=datetime.utcnow() + timedelta(hours=24)
     )
 
-    return (
-        f"https://{blob_service_client.account_name}"
-        f".blob.core.windows.net/{container_name}/{file_name}"
-        f"?{sas_token}"
-    )
+    return f"https://{blob_service_client.account_name}.blob.core.windows.net/{container_name}/{blob_name}?{sas_token}"
 
 
 # Sanitizes container name for Azure Blob Storage, replaces invalid chars.
@@ -313,21 +315,26 @@ def get_mongo_client(connection_string):
     return MongoClient(connection_string)
 
 # Function to save data in JSON format
+
+
 def save_as_json(dataframes, base_filename):
     for name, df in dataframes.items():
         json_file_path = f"{base_filename}-{name}.json"
         df.to_json(json_file_path, orient='records', date_format='iso')
         print(f"JSON file saved locally at: {json_file_path}")
 
+
 def ensure_output_directory(directory_name="output"):
     if not os.path.exists(directory_name):
         os.makedirs(directory_name)
+
 
 def create_zip_file(output_directory, base_filename, include_excel, json_filenames):
     zip_filename = os.path.join(output_directory, f"{base_filename}.zip")
     with zipfile.ZipFile(zip_filename, 'w') as zipf:
         if include_excel:
-            excel_filename = os.path.join(output_directory, f"{base_filename}.xlsx")
+            excel_filename = os.path.join(
+                output_directory, f"{base_filename}.xlsx")
             zipf.write(excel_filename, os.path.basename(excel_filename))
         for json_filename in json_filenames:
             zipf.write(json_filename, os.path.basename(json_filename))
@@ -340,12 +347,18 @@ def main():
         description='GitHub Repository Traffic Data Fetcher'
     )
     parser.add_argument('--repo', required=True, help='Repository name')
-    parser.add_argument('--owner', required=True, help='Organization/user name that owns the repository')
-    parser.add_argument('--output-format', choices=['excel', 'json', 'all'], default='excel', help='Output format for the data (excel, json, or all)')
-    parser.add_argument('--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data'))
-    parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
-    parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
-    parser.add_argument('--azure-storage-connection-string', help=('Optional: Azure Blob Storage connection string for storing the output file'))
+    parser.add_argument('--owner', required=True,
+                        help='Organization/user name that owns the repository')
+    parser.add_argument('--output-format', choices=['excel', 'json', 'all'],
+                        default='excel', help='Output format for the data (excel, json, or all)')
+    parser.add_argument(
+        '--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data'))
+    parser.add_argument('--token-file', required=True,
+                        help='Path to a text file containing the GitHub Personal Access Token')
+    parser.add_argument('--mongodb-connection-string', required=True,
+                        help='MongoDB connection string to store and retrieve the data')
+    parser.add_argument('--azure-storage-connection-string', help=(
+        'Optional: Azure Blob Storage connection string for storing the output file'))
     args = parser.parse_args()
 
     token = read_token_from_file(args.token_file)
@@ -362,28 +375,39 @@ def main():
     # Fetch and process data from GitHub API
     views_data = get_github_data(f"{base_url}/traffic/views", token)
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
-    referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
-    popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
+    referrers_data = get_github_data(
+        f"{base_url}/traffic/popular/referrers", token)
+    popular_content_data = get_github_data(
+        f"{base_url}/traffic/popular/paths", token)
     stars_data = get_stars_data(base_url, token)
     forks_data = get_forks_data(base_url, token)
 
     # Convert the processed data to DataFrames
     referrers_df = pd.DataFrame(process_referrers_data(referrers_data))
-    popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data))
+    popular_content_df = pd.DataFrame(
+        process_popular_content_data(popular_content_data))
     stars_df = pd.DataFrame(process_stars_data(stars_data))
     forks_df = pd.DataFrame(process_forks_data(forks_data))
 
     # Process and append the new data
-    traffic_df = append_new_data(mongo_client, args.repo, "TrafficStats", process_traffic_data(views_data), 'Date')
-    clones_df = append_new_data(mongo_client, args.repo, "GitClones", process_clones_data(clones_data), 'Date')
+    traffic_df = append_new_data(
+        mongo_client, args.repo, "TrafficStats", process_traffic_data(views_data), 'Date')
+    clones_df = append_new_data(
+        mongo_client, args.repo, "GitClones", process_clones_data(clones_data), 'Date')
 
     # Save to MongoDB
-    save_to_mongodb(mongo_client, args.repo, "TrafficStats", traffic_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "GitClones", clones_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "ReferringSites", referrers_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "PopularContent", popular_content_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "Stars", stars_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "Forks", forks_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "TrafficStats",
+                    traffic_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "GitClones",
+                    clones_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "ReferringSites",
+                    referrers_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "PopularContent",
+                    popular_content_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "Stars",
+                    stars_df.to_dict('records'))
+    save_to_mongodb(mongo_client, args.repo, "Forks",
+                    forks_df.to_dict('records'))
 
     print("Data saved to MongoDB")
 
@@ -404,15 +428,19 @@ def main():
 
     # Save in Excel format
     if output_format in ['excel', 'all']:
-        excel_file_path = os.path.join(output_directory, f"{base_filename}.xlsx")
+        excel_file_path = os.path.join(
+            output_directory, f"{base_filename}.xlsx")
         with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-            traffic_df.to_excel(writer, sheet_name='Traffic Stats', index=False)
+            traffic_df.to_excel(
+                writer, sheet_name='Traffic Stats', index=False)
             format_excel_header(writer, 'Traffic Stats')
             clones_df.to_excel(writer, sheet_name='Git Clones', index=False)
             format_excel_header(writer, 'Git Clones')
-            referrers_df.to_excel(writer, sheet_name='Referring Sites', index=False)
+            referrers_df.to_excel(
+                writer, sheet_name='Referring Sites', index=False)
             format_excel_header(writer, 'Referring Sites')
-            popular_content_df.to_excel(writer, sheet_name='Popular Content', index=False)
+            popular_content_df.to_excel(
+                writer, sheet_name='Popular Content', index=False)
             format_excel_header(writer, 'Popular Content')
             stars_df.to_excel(writer, sheet_name='Stars', index=False)
             format_excel_header(writer, 'Stars')
@@ -424,7 +452,8 @@ def main():
     if output_format in ['json', 'all']:
         json_file_paths = []
         for df_name, df in dataframes.items():
-            json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
+            json_file_path = os.path.join(
+                output_directory, f"{base_filename}-{df_name}.json")
             df.to_json(json_file_path, orient='records', date_format='iso')
             json_file_paths.append(json_file_path)
             print(f"JSON file saved locally at: {json_file_path}")
@@ -433,30 +462,39 @@ def main():
     if args.azure_storage_connection_string:
         container_name = sanitize_container_name(args.repo)
         if output_format in ['json', 'all']:
-            # Create and upload a zip file containing the JSON (and possibly Excel) files
+            # Upload JSON files to 'json/' directory
+            for json_file in json_file_paths:
+                azure_blob_url = upload_to_azure_blob(
+                    args.azure_storage_connection_string,
+                    container_name,
+                    json_file, os.path.basename(json_file),
+                    directory='json/'
+                )
+                print(
+                    f"JSON file uploaded to Azure Blob Storage: {azure_blob_url}")
+
+        if output_format in ['excel', 'all']:
+            # Upload Excel file to 'excel/' directory
+            azure_blob_url = upload_to_azure_blob(
+                args.azure_storage_connection_string,
+                container_name,
+                excel_file_path, os.path.basename(excel_file_path),
+                directory='excel/'
+            )
+            print(f"Excel file uploaded to Azure Blob Storage: {azure_blob_url}")
+
+        if output_format == 'all':
+            # Upload ZIP file to root directory
             zip_filename = f"{base_filename}.zip"
             with zipfile.ZipFile(os.path.join(output_directory, zip_filename), 'w') as zipf:
                 for json_file in json_file_paths:
                     zipf.write(json_file, os.path.basename(json_file))
-                if output_format == 'all':
-                    zipf.write(excel_file_path, os.path.basename(excel_file_path))
+                zipf.write(excel_file_path, os.path.basename(excel_file_path))
             azure_blob_url = upload_to_azure_blob(
                 args.azure_storage_connection_string,
                 container_name,
                 os.path.join(output_directory, zip_filename), zip_filename
             )
-            print(f"Zipped file uploaded to Azure Blob Storage. Temporary download link (valid for 24 hours): {azure_blob_url}")
-        elif output_format == 'excel':
-            azure_blob_url = upload_to_azure_blob(
-                args.azure_storage_connection_string,
-                container_name,
-                excel_file_path, os.path.basename(excel_file_path)
-            )
-            print(
-                "Excel file uploaded to Azure Blob Storage. "
-                "Temporary download link (valid for 24 hours): "
-                f"{azure_blob_url}"
-            )
-
+            print(f"ZIP file uploaded to Azure Blob Storage: {azure_blob_url}")
 if __name__ == "__main__":
     main()
