@@ -340,37 +340,16 @@ def create_zip_file(output_directory, base_filename, include_excel, json_filenam
             zipf.write(json_filename, os.path.basename(json_filename))
     return zip_filename
 
-
-# Main function: sets up CLI arguments and executes script logic.
-def main():
-    parser = argparse.ArgumentParser(
-        description='GitHub Repository Traffic Data Fetcher'
-    )
-    parser.add_argument('--repo', required=True, help='Repository name')
-    parser.add_argument('--owner', required=True,
-                        help='Organization/user name that owns the repository')
-    parser.add_argument('--output-format', choices=['excel', 'json', 'all'],
-                        default='excel', help='Output format for the data (excel, json, or all)')
-    parser.add_argument(
-        '--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data'))
-    parser.add_argument('--token-file', required=True,
-                        help='Path to a text file containing the GitHub Personal Access Token')
-    parser.add_argument('--mongodb-connection-string', required=True,
-                        help='MongoDB connection string to store and retrieve the data')
-    parser.add_argument('--azure-storage-connection-string', help=(
-        'Optional: Azure Blob Storage connection string for storing the output file'))
-    args = parser.parse_args()
-
-    token = read_token_from_file(args.token_file)
-    if not token:
-        return
-
-    base_url = f"https://api.github.com/repos/{args.owner}/{args.repo}"
-    filename = args.filename or f"{args.owner}-{args.repo}-traffic-data"
+def retrieve_and_process_stats(owner, repo, filename,
+                                mongodb_connection_string,
+                                azure_storage_connection_string,
+                                output_format, token):
+    base_url = f"https://api.github.com/repos/{owner}/{repo}"
+    filename = filename or f"{owner}-{repo}-traffic-data"
     base_filename = os.path.splitext(filename)[0]
 
     # Create MongoDB client
-    mongo_client = get_mongo_client(args.mongodb_connection_string)
+    mongo_client = get_mongo_client(mongodb_connection_string)
 
     # Fetch and process data from GitHub API
     views_data = get_github_data(f"{base_url}/traffic/views", token)
@@ -391,22 +370,22 @@ def main():
 
     # Process and append the new data
     traffic_df = append_new_data(
-        mongo_client, args.repo, "TrafficStats", process_traffic_data(views_data), 'Date')
+        mongo_client, repo, "TrafficStats", process_traffic_data(views_data), 'Date')
     clones_df = append_new_data(
-        mongo_client, args.repo, "GitClones", process_clones_data(clones_data), 'Date')
+        mongo_client, repo, "GitClones", process_clones_data(clones_data), 'Date')
 
     # Save to MongoDB
-    save_to_mongodb(mongo_client, args.repo, "TrafficStats",
+    save_to_mongodb(mongo_client, repo, "TrafficStats",
                     traffic_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "GitClones",
+    save_to_mongodb(mongo_client, repo, "GitClones",
                     clones_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "ReferringSites",
+    save_to_mongodb(mongo_client, repo, "ReferringSites",
                     referrers_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "PopularContent",
+    save_to_mongodb(mongo_client, repo, "PopularContent",
                     popular_content_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "Stars",
+    save_to_mongodb(mongo_client, repo, "Stars",
                     stars_df.to_dict('records'))
-    save_to_mongodb(mongo_client, args.repo, "Forks",
+    save_to_mongodb(mongo_client, repo, "Forks",
                     forks_df.to_dict('records'))
 
     print("Data saved to MongoDB")
@@ -416,7 +395,7 @@ def main():
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
-    output_format = args.output_format
+    output_format = output_format
     dataframes = {
         'TrafficStats': traffic_df,
         'GitClones': clones_df,
@@ -459,13 +438,13 @@ def main():
             print(f"JSON file saved locally at: {json_file_path}")
 
     # Upload to Azure Blob Storage
-    if args.azure_storage_connection_string:
-        container_name = sanitize_container_name(args.repo)
+    if azure_storage_connection_string:
+        container_name = sanitize_container_name(repo)
         if output_format in ['json', 'all']:
             # Upload JSON files to 'json/' directory
             for json_file in json_file_paths:
                 azure_blob_url = upload_to_azure_blob(
-                    args.azure_storage_connection_string,
+                    azure_storage_connection_string,
                     container_name,
                     json_file, os.path.basename(json_file),
                     directory='json/'
@@ -476,7 +455,7 @@ def main():
         if output_format in ['excel', 'all']:
             # Upload Excel file to 'excel/' directory
             azure_blob_url = upload_to_azure_blob(
-                args.azure_storage_connection_string,
+                azure_storage_connection_string,
                 container_name,
                 excel_file_path, os.path.basename(excel_file_path),
                 directory='excel/'
@@ -491,10 +470,37 @@ def main():
                     zipf.write(json_file, os.path.basename(json_file))
                 zipf.write(excel_file_path, os.path.basename(excel_file_path))
             azure_blob_url = upload_to_azure_blob(
-                args.azure_storage_connection_string,
+                azure_storage_connection_string,
                 container_name,
                 os.path.join(output_directory, zip_filename), zip_filename
             )
             print(f"ZIP file uploaded to Azure Blob Storage: {azure_blob_url}")
+
+# Main function: sets up CLI arguments and executes script logic.
+def main():
+    parser = argparse.ArgumentParser(
+        description='GitHub Repository Traffic Data Fetcher'
+    )
+    parser.add_argument('--repo', required=True, help='Repository name')
+    parser.add_argument('--owner', required=True,
+                        help='Organization/user name that owns the repository')
+    parser.add_argument('--output-format', choices=['excel', 'json', 'all'],
+                        default='excel', help='Output format for the data (excel, json, or all)')
+    parser.add_argument(
+        '--filename', help=('Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data'))
+    parser.add_argument('--token-file', required=True,
+                        help='Path to a text file containing the GitHub Personal Access Token')
+    parser.add_argument('--mongodb-connection-string', required=True,
+                        help='MongoDB connection string to store and retrieve the data')
+    parser.add_argument('--azure-storage-connection-string', help=(
+        'Optional: Azure Blob Storage connection string for storing the output file'))
+    args = parser.parse_args()
+
+    token = read_token_from_file(args.token_file)
+    if not token:
+        return
+
+    retrieve_and_process_stats(args.owner, args.repo, args.filename, args.mongodb_connection_string, args.azure_storage_connection_string, args.output_format, token)
+
 if __name__ == "__main__":
     main()
