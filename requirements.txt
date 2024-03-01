@@ -3,3 +3,4 @@ requests
 pymongo
 openpyxl
 azure-storage-blob
+azure-functions

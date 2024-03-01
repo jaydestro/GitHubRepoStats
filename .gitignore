@@ -160,3 +160,14 @@ cython_debug/
 #.idea/
 *.xlsx
 output/*
+
+.git*
+
+__azurite_db*__.json
+__blobstorage__
+__queuestorage__
+local.settings.json
+test
+.python_packages
+
+.vscode/
