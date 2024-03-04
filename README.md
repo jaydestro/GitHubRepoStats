@@ -10,6 +10,7 @@ This tool is designed to fetch and process traffic data for GitHub repositories.
 1. [Configuration](Configuration)
 1. [Usage](Usage)
 1. [Data Output](Data-Output)
+1. [Azure Function Integration](#Azure-Function-Integration)
 1. [Todo](Todo)
 1. [Contributing](Contributing)
 1. [License](License)
@@ -115,6 +116,40 @@ The script processes and outputs data in the following categories:
    - Data is aggregated to show monthly and yearly trends, providing insights into the repository's long-term appeal and reach.
 
 Each category is available in a structured format and is saved into separate sheets in an Excel file. Additionally, each category is stored as a collection in the MongoDB database, providing persistent storage and enabling advanced querying capabilities. MongoDB integration is a core feature of this tool, ensuring comprehensive data management and analysis. The option to store the Excel file in Azure Blob Storage adds another layer of functionality, allowing for secure and convenient sharing of the report.
+
+### Azure Function Integration
+
+This tool has been enhanced with Azure Function integration, allowing it to run as a time-triggered Azure Function. This enables automated, scheduled fetching of GitHub repository traffic data without manual intervention, making the process more efficient and reliable.
+
+### Key Benefits
+
+- **Automated Scheduling**: Configure the function to run at specific times (e.g., daily at midnight) to regularly update your traffic data.
+- **Scalability**: Leverage Azure's serverless architecture to handle varying loads without the need to manage server resources.
+- **Reliability**: Azure Functions ensures high availability and consistent performance, ensuring that your data fetching process runs smoothly.
+- **Cost-Effective**: Pay only for the compute resources you use while the Azure Function is running, leading to potential cost savings compared to always-on solutions.
+
+### Setup:
+
+To set up the Azure Function:
+
+1. Deploy the provided `function_app.py` script in your Azure Functions environment.
+1. Configure the function trigger using the `host.json` file to specify the execution schedule.
+1. Set the necessary environment variables in your Azure Function application settings. These variables are crucial for the script to access required resources and perform its operations:
+
+   - `OWNER`: The GitHub username or organization name that owns the repository.
+   - `REPO`: The name of the GitHub repository.
+   - `GHPAT`: Your GitHub Personal Access Token.
+   - `OUTPUT`: The desired output format for the processed data (e.g., `excel`, `json`, etc.).
+   - `CUSTOMCONNSTR_MONGODB`: The MongoDB connection string for storing fetched data.
+   - `CUSTOMCONNSTR_BLOBSTORAGE`: The Azure Blob Storage connection string for storing the Excel report.
+
+   These environment variables must be correctly set in the Azure portal for the Azure Function to operate successfully.
+
+### Usage:
+
+Once configured, the Azure Function will automatically trigger at the scheduled times. It will fetch the latest GitHub repository traffic data and process it as configured, storing the results in MongoDB and optionally in Azure Blob Storage. The function's behavior and data handling are controlled by the set environment variables, ensuring a flexible and customizable operation.
+
+## Todo
 
 ## Todo
 
