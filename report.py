@@ -311,9 +311,9 @@ def process_clones_data(data):
         for item in data['clones']
     ]
 
+# Processes referrer data into structured format
+# with site, views, and unique visitors.
 def process_referrers_data(data):
-    if data is None:
-        return []
     timestamp = datetime.now()
     return [
         {"Referring site": item['referrer'],
