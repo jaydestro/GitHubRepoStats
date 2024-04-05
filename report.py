@@ -162,6 +162,28 @@ def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_
 
     return f"https://{blob_service_client.account_name}.blob.core.windows.net/{container_name}/{full_blob_name}?{sas_token}"
 
+# read file from azure blob storage
+def read_file_from_azure_blob(connection_string, container_name, blob_name):
+    try:
+        # Create a BlobServiceClient using the connection string
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+
+        # Get a reference to the container and the blob
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+
+        # Download the blob content
+        download_stream = blob_client.download_blob()
+        data = download_stream.readall()
+
+        csv_content = data.decode("utf-8")
+        # Split the content into lines and then split each line into a tuple
+        tuples = [tuple(line.split(',')) for line in csv_content.split('\n') if line]
+
+        return tuples
+
+    except Exception as e:
+        print(f"Error reading from Azure Blob Storage: {e}")
+        return None
 
 # Retrieves data from GitHub API using a URL and token.
 # Handles HTTP responses and returns JSON data if successful.
@@ -289,9 +311,9 @@ def process_clones_data(data):
         for item in data['clones']
     ]
 
-# Processes referrer data into structured format
-# with site, views, and unique visitors.
 def process_referrers_data(data):
+    if data is None:
+        return []
     timestamp = datetime.now()
     return [
         {"Referring site": item['referrer'],
