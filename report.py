@@ -360,10 +360,22 @@ def fetch_all_data_from_mongodb(client, database_name, collection_name):
 def append_new_data(mongo_client, database_name, collection_name, new_data, date_column):
     old_df = fetch_all_data_from_mongodb(mongo_client, database_name, collection_name)
     new_df = pd.DataFrame(new_data)
+
+    # Check if date_column exists in both old_df and new_df
+    if date_column not in old_df.columns:
+        old_df[date_column] = pd.NaT
+    if date_column not in new_df.columns:
+        new_df[date_column] = pd.NaT
+
+    # Convert date_column to datetime, handling errors
     new_df[date_column] = pd.to_datetime(new_df[date_column], errors='coerce')
     old_df[date_column] = pd.to_datetime(old_df[date_column], errors='coerce')
+
+    # Clean up dataframes by dropping rows where date_column is NaT
     new_df = new_df.dropna(subset=[date_column])
     old_df = old_df.dropna(subset=[date_column])
+
+    # Concatenate, remove duplicates, and sort
     combined_df = pd.concat([old_df, new_df], ignore_index=True)
     combined_df.drop_duplicates(subset=[date_column], keep='last', inplace=True)
     combined_df.sort_values(by=date_column, inplace=True)
