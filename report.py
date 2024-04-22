@@ -294,6 +294,9 @@ def process_forks_data(forks_data):
 # Converts traffic data into structured format
 # with date, views, and unique visitors.
 def process_traffic_data(data):
+    if data is None:
+        return []
+
     return [
         {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
          "Views": item['count'],
@@ -304,6 +307,9 @@ def process_traffic_data(data):
 # Converts clone data into structured format
 # with date, count, and unique cloners.
 def process_clones_data(data):
+    if data is None:
+        return []
+
     return [
         {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
          "Clones": item['count'],
@@ -314,6 +320,9 @@ def process_clones_data(data):
 # Processes referrer data into structured format
 # with site, views, and unique visitors.
 def process_referrers_data(data):
+    if data is None:
+        return []
+
     timestamp = datetime.now()
     return [
         {"Referring site": item['referrer'],
@@ -326,6 +335,9 @@ def process_referrers_data(data):
 # Converts popular content data into structured
 # format with path, views, and visitors.
 def process_popular_content_data(data):
+    if data is None:
+        return []
+
     timestamp = datetime.now()
     return [
         {"Path": item['path'],
@@ -447,7 +459,7 @@ def main():
     parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
     parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
     parser.add_argument('--azure-storage-connection-string', help='Optional: Azure Blob Storage connection string for storing the output file')
-    
+
     args = parser.parse_args()
 
     token = read_token_from_file(args.token_file)
@@ -459,4 +471,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
