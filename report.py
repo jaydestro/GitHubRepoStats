@@ -10,12 +10,21 @@ from openpyxl.styles import Font, Border, Side
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 from azure.core.exceptions import ResourceExistsError
 
+def sanitize_name(name):
+    """Replaces non-alphanumeric characters with dashes and converts to lowercase."""
+    return ''.join(char if char.isalnum() else '-' for char in name).lower()
+
+def get_mongo_client(connection_string):
+    """Creates and returns a MongoDB client using the provided connection string."""
+    return MongoClient(connection_string)
+
 def retrieve_and_process_stats(owner, repo, filename,
                                 mongodb_connection_string,
                                 azure_storage_connection_string,
                                 output_format, token):
     base_url = f"https://api.github.com/repos/{owner}/{repo}"
-    filename = filename or f"{owner}-{repo}-traffic-data"
+    sanitized_repo = sanitize_name(repo)
+    filename = filename or f"{owner}-{sanitized_repo}-traffic-data"
     base_filename = os.path.splitext(filename)[0]
 
     # Create MongoDB client
@@ -36,15 +45,15 @@ def retrieve_and_process_stats(owner, repo, filename,
     forks_df = pd.DataFrame(process_forks_data(forks_data))
 
     # Process and append the new data
-    traffic_df = append_new_data(mongo_client, repo, "TrafficStats", process_traffic_data(views_data), 'Date')
-    clones_df = append_new_data(mongo_client, repo, "GitClones", process_clones_data(clones_data), 'Date')
+    traffic_df = append_new_data(mongo_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data), 'Date')
+    clones_df = append_new_data(mongo_client, sanitized_repo, "GitClones", process_clones_data(clones_data), 'Date')
     # Save to MongoDB
-    save_to_mongodb(mongo_client, repo, "TrafficStats", traffic_df.to_dict('records'))
-    save_to_mongodb(mongo_client, repo, "GitClones", clones_df.to_dict('records'))
-    save_to_mongodb(mongo_client, repo, "ReferringSites", referrers_df.to_dict('records'))
-    save_to_mongodb(mongo_client, repo, "PopularContent", popular_content_df.to_dict('records'))
-    save_to_mongodb(mongo_client, repo, "Stars", stars_df.to_dict('records'))
-    save_to_mongodb(mongo_client, repo, "Forks", forks_df.to_dict('records'))
+    save_to_mongodb(mongo_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'))
+    save_to_mongodb(mongo_client, sanitized_repo, "GitClones", clones_df.to_dict('records'))
+    save_to_mongodb(mongo_client, sanitized_repo, "ReferringSites", referrers_df.to_dict('records'))
+    save_to_mongodb(mongo_client, sanitized_repo, "PopularContent", popular_content_df.to_dict('records'))
+    save_to_mongodb(mongo_client, sanitized_repo, "Stars", stars_df.to_dict('records'))
+    save_to_mongodb(mongo_client, sanitized_repo, "Forks", forks_df.to_dict('records'))
 
     print("Data saved to MongoDB")
 
@@ -60,7 +69,7 @@ def retrieve_and_process_stats(owner, repo, filename,
 
     # Check if Azure Blob Storage connection string is provided
     if azure_storage_connection_string:
-        container_name = sanitize_container_name(repo)
+        container_name = sanitize_name(repo)
 
         # Upload JSON files directly to Azure Blob Storage
         if output_format in ['json', 'all']:
@@ -134,6 +143,9 @@ def retrieve_and_process_stats(owner, repo, filename,
                 json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
                 df.to_json(json_file_path, orient='records', date_format='iso')
                 print(f"JSON file saved locally at: {json_file_path}")
+
+# Include other helper functions like upload_to_azure_blob_stream and others as required.
+
 
 def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_name, directory=''):
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
