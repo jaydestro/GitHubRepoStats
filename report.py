@@ -32,6 +32,7 @@ def retrieve_and_process_stats(owner, repo, filename,
 
     # Fetch and process data from GitHub API
     views_data = get_github_data(f"{base_url}/traffic/views", token)
+    processed_views = process_traffic_data(views_data, owner, repo)
     clones_data = get_github_data(f"{base_url}/traffic/clones", token)
     referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
     popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
@@ -39,14 +40,15 @@ def retrieve_and_process_stats(owner, repo, filename,
     forks_data = get_forks_data(base_url, token)
 
     # Convert the processed data to DataFrames
-    referrers_df = pd.DataFrame(process_referrers_data(referrers_data))
-    popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data))
-    stars_df = pd.DataFrame(process_stars_data(stars_data))
-    forks_df = pd.DataFrame(process_forks_data(forks_data))
+    referrers_df = pd.DataFrame(process_referrers_data(referrers_data, owner, repo))
+    popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data, owner, repo))  # Corrected
+    stars_df = pd.DataFrame(process_stars_data(stars_data, owner, repo))
+    forks_df = pd.DataFrame(process_forks_data(forks_data, owner, repo))
+
 
     # Process and append the new data
-    traffic_df = append_new_data(mongo_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data), 'Date')
-    clones_df = append_new_data(mongo_client, sanitized_repo, "GitClones", process_clones_data(clones_data), 'Date')
+    traffic_df = append_new_data(mongo_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data, owner, repo), 'Date')
+    clones_df = append_new_data(mongo_client, sanitized_repo, "GitClones", process_clones_data(clones_data, owner, repo), 'Date')
     # Save to MongoDB
     save_to_mongodb(mongo_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'))
     save_to_mongodb(mongo_client, sanitized_repo, "GitClones", clones_df.to_dict('records'))
@@ -268,7 +270,7 @@ def get_forks_data(api_url, token):
             break
     return forks_data
 # Processes star data, calculating cumulative count per date.
-def process_stars_data(stars_data):
+def process_stars_data(stars_data, owner, repo):
     cumulative_count = {}
     total_stars = 0
     sorted_data = sorted(stars_data, key=lambda x: x['starred_at'])
@@ -279,14 +281,15 @@ def process_stars_data(stars_data):
         cumulative_count[date] = total_stars
 
     processed_data = [
-        {"Date": date, "Total Stars": count}
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Date": date, "Total Stars": count}
         for date, count in cumulative_count.items()
     ]
 
     return processed_data
 
 # Processes fork data, calculating cumulative count per date.
-def process_forks_data(forks_data):
+def process_forks_data(forks_data, owner, repo):
     cumulative_count = {}
     total_forks = 0
     sorted_data = sorted(forks_data, key=lambda x: x['created_at'])
@@ -297,7 +300,8 @@ def process_forks_data(forks_data):
         cumulative_count[date] = total_forks
 
     processed_data = [
-        {"Date": date, "Total Forks": count}
+        {"Repo Owner and Name": f"{owner}-{repo}",  # Use f-string for formatting
+        "Date": date, "Total Forks": count}
         for date, count in cumulative_count.items()
     ]
 
@@ -305,25 +309,26 @@ def process_forks_data(forks_data):
 
 # Converts traffic data into structured format
 # with date, views, and unique visitors.
-def process_traffic_data(data):
+def process_traffic_data(data, owner, repo):
     if data is None:
         return []
-
     return [
-        {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
+       {"Repo Owner and Name": f"{owner}-{repo}",
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date(),
          "Views": item['count'],
          "Unique visitors": item['uniques']}
-        for item in data['views']
+        for item in data.get('views', [])
     ]
 
 # Converts clone data into structured format
 # with date, count, and unique cloners.
-def process_clones_data(data):
+def process_clones_data(data, owner, repo):
     if data is None:
         return []
 
     return [
-        {"Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
          "Clones": item['count'],
          "Unique cloners": item['uniques']}
         for item in data['clones']
@@ -331,13 +336,14 @@ def process_clones_data(data):
 
 # Processes referrer data into structured format
 # with site, views, and unique visitors.
-def process_referrers_data(data):
+def process_referrers_data(data, owner, repo):
     if data is None:
         return []
 
     timestamp = datetime.now()
     return [
-        {"Referring site": item['referrer'],
+        {"Repo Owner and Name": f"{owner}-{repo}",  # Use f-string for formatting
+         "Referring site": item['referrer'],
          "Views": item['count'],
          "Unique visitors": item['uniques'],
          "FetchedAt": timestamp}
@@ -346,13 +352,14 @@ def process_referrers_data(data):
 
 # Converts popular content data into structured
 # format with path, views, and visitors.
-def process_popular_content_data(data):
+def process_popular_content_data(data, owner, repo):
     if data is None:
         return []
 
     timestamp = datetime.now()
     return [
-        {"Path": item['path'],
+        {"Repo Owner and Name": f"{owner}-{repo}",  # Use f-string for formatting
+         "Path": item['path'],
          "Views": item['count'],
          "Unique visitors": item['uniques'],
          "FetchedAt": timestamp}
@@ -385,24 +392,21 @@ def append_new_data(mongo_client, database_name, collection_name, new_data, date
     old_df = fetch_all_data_from_mongodb(mongo_client, database_name, collection_name)
     new_df = pd.DataFrame(new_data)
 
-    # Check if date_column exists in both old_df and new_df
+    # Ensure date_column exists and is in datetime format
     if date_column not in old_df.columns:
         old_df[date_column] = pd.NaT
     if date_column not in new_df.columns:
         new_df[date_column] = pd.NaT
-
-    # Convert date_column to datetime, handling errors
     new_df[date_column] = pd.to_datetime(new_df[date_column], errors='coerce')
     old_df[date_column] = pd.to_datetime(old_df[date_column], errors='coerce')
 
-    # Clean up dataframes by dropping rows where date_column is NaT
+    # Clean and merge dataframes
     new_df = new_df.dropna(subset=[date_column])
     old_df = old_df.dropna(subset=[date_column])
-
-    # Concatenate, remove duplicates, and sort
     combined_df = pd.concat([old_df, new_df], ignore_index=True)
     combined_df.drop_duplicates(subset=[date_column], keep='last', inplace=True)
     combined_df.sort_values(by=date_column, inplace=True)
+
     return combined_df
 
 # Saves data to MongoDB, updates existing records and adds new ones.
