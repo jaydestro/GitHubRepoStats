@@ -9,6 +9,7 @@ from pymongo import MongoClient
 from openpyxl.styles import Font, Border, Side
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 from azure.core.exceptions import ResourceExistsError
+from azure.identity import DefaultAzureCredential
 
 def sanitize_name(name):
     """Replaces non-alphanumeric characters with dashes and converts to lowercase."""
@@ -21,7 +22,7 @@ def get_mongo_client(connection_string):
 def retrieve_and_process_stats(owner, repo, filename,
                                 mongodb_connection_string,
                                 azure_storage_connection_string,
-                                output_format, token):
+                                output_format, token, use_managed_identity):
     base_url = f"https://api.github.com/repos/{owner}/{repo}"
     sanitized_repo = sanitize_name(repo)
     filename = filename or f"{owner}-{sanitized_repo}-traffic-data"
@@ -85,7 +86,8 @@ def retrieve_and_process_stats(owner, repo, filename,
                     container_name,
                     json_bytes,
                     json_file_name,
-                    directory='json/'
+                    directory='json/',
+                    use_managed_identity=use_managed_identity 
                 )
                 print(f"JSON file uploaded to Azure Blob Storage: {azure_blob_url}")
 
@@ -149,8 +151,8 @@ def retrieve_and_process_stats(owner, repo, filename,
 # Include other helper functions like upload_to_azure_blob_stream and others as required.
 
 
-def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_name, directory=''):
-    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_name, directory='', use_managed_identity=False):
+    blob_service_client = create_blob_service_client(connection_string, use_managed_identity)
     container_client = blob_service_client.get_container_client(container_name)
 
     try:
@@ -176,11 +178,17 @@ def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_
 
     return f"https://{blob_service_client.account_name}.blob.core.windows.net/{container_name}/{full_blob_name}?{sas_token}"
 
+def create_blob_service_client(connection_string, use_managed_identity=False):
+    if use_managed_identity:
+        credential = DefaultAzureCredential()
+        return BlobServiceClient(account_url=connection_string, credential=credential)
+    return BlobServiceClient.from_connection_string(connection_string)
+
+
 # read file from azure blob storage
-def read_file_from_azure_blob(connection_string, container_name, blob_name):
+def read_file_from_azure_blob(connection_string, container_name, blob_name, use_managed_identity=False):
     try:
-        # Create a BlobServiceClient using the connection string
-        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        blob_service_client = create_blob_service_client(connection_string, use_managed_identity)
 
         # Get a reference to the container and the blob
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
@@ -475,6 +483,7 @@ def main():
     parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
     parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
     parser.add_argument('--azure-storage-connection-string', help='Optional: Azure Blob Storage connection string for storing the output file')
+    parser.add_argument('--managed-identity-storage', required=False, action='store_true', help='Use Managed Identity for Azure Blob Storage authentication')
 
     args = parser.parse_args()
 
@@ -483,7 +492,7 @@ def main():
         print("Failed to read GitHub token.")
         return
 
-    retrieve_and_process_stats(args.owner, args.repo, args.filename, args.mongodb_connection_string, args.azure_storage_connection_string, args.output_format, token)
+    retrieve_and_process_stats(args.owner, args.repo, args.filename, args.mongodb_connection_string, args.azure_storage_connection_string, args.output_format, token, args.managed_identity_storage)
 
 if __name__ == "__main__":
     main()

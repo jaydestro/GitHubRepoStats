@@ -20,10 +20,11 @@ def main(myTimer: func.TimerRequest) -> None:
     azure_storage_connection_string = os.environ["CUSTOMCONNSTR_BLOBSTORAGE"]
     token = os.environ["GHPAT"]
     output_format = os.environ["OUTPUT"]
+    use_managed_identity = bool(os.environ["USE_MANAGED_IDENTITY"])
 
     # Retrieve file and parse out owner/repos to collect stats
     try:
-        repos = read_file_from_azure_blob(azure_storage_connection_string, "githubrepostats", "repos.csv")
+        repos = read_file_from_azure_blob(azure_storage_connection_string, "githubrepostats", "repos.csv", use_managed_identity)
         if repos:
             total_repos = len(repos)
             processed_count = 0
@@ -32,7 +33,7 @@ def main(myTimer: func.TimerRequest) -> None:
                 try:
                     filename = f"{owner}-{repo}-traffic-data"
                     logging.info(f"Starting to process {owner}/{repo}")
-                    retrieve_and_process_stats(owner, repo, filename, mongodb_connection_string, azure_storage_connection_string, output_format, token)
+                    retrieve_and_process_stats(owner, repo, filename, mongodb_connection_string, azure_storage_connection_string, output_format, token, use_managed_identity)
                     processed_count += 1
                     logging.info(f"Successfully processed {owner}/{repo}")
                 except Exception as e:

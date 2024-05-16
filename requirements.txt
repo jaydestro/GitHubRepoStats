@@ -4,3 +4,4 @@ pymongo
 openpyxl
 azure-storage-blob
 azure-functions
+azure-identity
