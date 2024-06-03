@@ -15,15 +15,15 @@ def main(myTimer: func.TimerRequest) -> None:
     if myTimer.past_due:
         logging.info('The timer is past due!')
 
-    # Environment variables for database and storage connections
-    mongodb_connection_string = os.environ["CUSTOMCONNSTR_MONGODB"]
-    azure_storage_connection_string = os.environ["CUSTOMCONNSTR_BLOBSTORAGE"]
-    token = os.environ["GHPAT"]
-    output_format = os.environ["OUTPUT"]
-    use_managed_identity = bool(os.environ["USE_MANAGED_IDENTITY"])
-
-    # Retrieve file and parse out owner/repos to collect stats
     try:
+        # Environment variables for database and storage connections
+        mongodb_connection_string = os.environ["CUSTOMCONNSTR_MONGODB"]
+        azure_storage_connection_string = os.environ["CUSTOMCONNSTR_BLOBSTORAGE"]
+        token = os.environ["GHPAT"]
+        output_format = os.environ["OUTPUT"]
+        use_managed_identity = os.environ.get("USE_MANAGED_IDENTITY", "false").lower() == "true"
+
+        # Retrieve file and parse out owner/repos to collect stats
         repos = read_file_from_azure_blob(azure_storage_connection_string, "githubrepostats", "repos.csv", use_managed_identity)
         if repos:
             total_repos = len(repos)
@@ -46,6 +46,7 @@ def main(myTimer: func.TimerRequest) -> None:
 
         else:
             logging.warning("No repositories found to process.")
+    except KeyError as e:
+        logging.error(f"Missing environment variable: {str(e)}")
     except Exception as e:
         logging.error(f"Failed to read from Azure Blob or process data: {str(e)}")
-
