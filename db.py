@@ -150,8 +150,8 @@ def preprocess_data(data):
             item['Unique visitors'] = int(item['Unique visitors'])
         if 'FetchedAt' in item and isinstance(item['FetchedAt'], pd.Timestamp):
             item['FetchedAt'] = item['FetchedAt'].isoformat()
-        if 'id' in item:
-            item['id'] = str(item['id'])
+        if 'id' not in item or pd.isna(item['id']) or item['id'] == "nan":
+            item['id'] = str(uuid.uuid4())  # Generate a unique ID
     return data
 
 def validate_and_convert_data(data, schema_validator):
