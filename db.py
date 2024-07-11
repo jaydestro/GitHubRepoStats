@@ -154,13 +154,17 @@ def convert_to_json_serializable(data):
 def preprocess_data(data):
     """Preprocess data to ensure it matches the expected schema."""
     for item in data:
-        if 'Date' in item and isinstance(item['Date'], pd.Timestamp):
+        if 'Date' in item and isinstance(item['Date'], (pd.Timestamp, datetime)):
             item['Date'] = item['Date'].isoformat()
         if 'Views' in item and isinstance(item['Views'], float):
             item['Views'] = int(item['Views'])
         if 'Unique visitors' in item and isinstance(item['Unique visitors'], float):
             item['Unique visitors'] = int(item['Unique visitors'])
-        if 'FetchedAt' in item and isinstance(item['FetchedAt'], pd.Timestamp):
+        if 'Clones' in item and isinstance(item['Clones'], float):
+            item['Clones'] = int(item['Clones'])
+        if 'Unique cloners' in item and isinstance(item['Unique cloners'], float):
+            item['Unique cloners'] = int(item['Unique cloners'])
+        if 'FetchedAt' in item and isinstance(item['FetchedAt'], (pd.Timestamp, datetime)):
             item['FetchedAt'] = item['FetchedAt'].isoformat()
         if 'id' not in item or pd.isna(item['id']) or item['id'] == "nan":
             item['id'] = str(uuid.uuid4())  # Generate a unique ID
@@ -196,7 +200,7 @@ def validate_traffic_stats_schema(data):
     return True
 
 def validate_clones_schema(data):
-    """Validate the schema of GitClones data."""
+    """Validate the schema of Clones data."""
     required_fields = ['Date', 'Clones', 'Unique cloners', 'Repo Owner and Name']
     for item in data:
         for field in required_fields:

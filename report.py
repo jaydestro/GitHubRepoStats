@@ -313,25 +313,22 @@ def process_forks_data(forks_data, owner, repo):
     return processed_data
 
 def process_traffic_data(data, owner, repo):
-    logger.info("Processing traffic data")
     if data is None:
         return []
-    processed_data = [
+    return [
         {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date(),
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date().isoformat(),
          "Views": item['count'],
          "Unique visitors": item['uniques']}
         for item in data.get('views', [])
     ]
-    logger.info(f"Processed traffic data: {len(processed_data)} records")
-    return processed_data
 
 def process_clones_data(data, owner, repo):
     if data is None:
         return []
     return [
         {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date().isoformat(),
          "Clones": item['count'],
          "Unique cloners": item['uniques']}
         for item in data['clones']

@@ -176,3 +176,5 @@ repos_without_push_access.txt
 repos_with_push_access.csv
 
 helpers/
+run_report.sh
+logs
