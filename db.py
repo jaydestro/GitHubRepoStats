@@ -4,6 +4,7 @@ from azure.cosmos import CosmosClient, PartitionKey, exceptions
 import logging
 from datetime import datetime
 import json
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -103,14 +104,25 @@ def save_to_mongodb(client, database_name, collection_name, data):
     logger.info(f"Saving data to MongoDB database: {database_name}, collection: {collection_name}")
     db = client[database_name]
     collection = db[collection_name]
-    if collection_name == 'TrafficStats':
-        unique_field = 'Date'
-    else:
+
+    unique_field_map = {
+        'TrafficStats': 'Date',
+        'GitClones': 'Date',
+        'ReferringSites': 'Referring site',
+        'PopularContent': 'Path',
+        'Stars': 'Date',
+        'Forks': 'Date'
+    }
+
+    if collection_name not in unique_field_map:
         raise ValueError(f"Unknown collection name: {collection_name}")
+
+    unique_field = unique_field_map[collection_name]
     for item in data:
         query = {unique_field: item[unique_field]}
         update = {"$set": item}
         collection.update_one(query, update, upsert=True)
+
     logger.info(f"Saved {len(data)} records to MongoDB collection: {collection_name}")
 
 def validate_json(data):
@@ -183,11 +195,135 @@ def validate_traffic_stats_schema(data):
                 return False
     return True
 
+def validate_clones_schema(data):
+    """Validate the schema of GitClones data."""
+    required_fields = ['Date', 'Clones', 'Unique cloners', 'Repo Owner and Name']
+    for item in data:
+        for field in required_fields:
+            if field not in item:
+                logger.error(f"Missing field '{field}' in item: {item}")
+                return False
+            if field == 'Date' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Date' in item: {item}")
+                return False
+            if field == 'Clones' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Clones' in item: {item}")
+                return False
+            if field == 'Unique cloners' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Unique cloners' in item: {item}")
+                return False
+            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+                return False
+    return True
+
+def validate_referring_sites_schema(data):
+    """Validate the schema of ReferringSites data."""
+    required_fields = ['Referring site', 'Views', 'Unique visitors', 'FetchedAt', 'Repo Owner and Name']
+    for item in data:
+        for field in required_fields:
+            if field not in item:
+                logger.error(f"Missing field '{field}' in item: {item}")
+                return False
+            if field == 'Referring site' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Referring site' in item: {item}")
+                return False
+            if field == 'Views' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Views' in item: {item}")
+                return False
+            if field == 'Unique visitors' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Unique visitors' in item: {item}")
+                return False
+            if field == 'FetchedAt' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'FetchedAt' in item: {item}")
+                return False
+            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+                return False
+    return True
+
+def validate_popular_content_schema(data):
+    """Validate the schema of PopularContent data."""
+    required_fields = ['Path', 'Views', 'Unique visitors', 'FetchedAt', 'Repo Owner and Name']
+    for item in data:
+        for field in required_fields:
+            if field not in item:
+                logger.error(f"Missing field '{field}' in item: {item}")
+                return False
+            if field == 'Path' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Path' in item: {item}")
+                return False
+            if field == 'Views' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Views' in item: {item}")
+                return False
+            if field == 'Unique visitors' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Unique visitors' in item: {item}")
+                return False
+            if field == 'FetchedAt' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'FetchedAt' in item: {item}")
+                return False
+            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+                return False
+    return True
+
+def validate_stars_schema(data):
+    """Validate the schema of Stars data."""
+    required_fields = ['Date', 'Total Stars', 'Repo Owner and Name']
+    for item in data:
+        for field in required_fields:
+            if field not in item:
+                logger.error(f"Missing field '{field}' in item: {item}")
+                return False
+            if field == 'Date' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Date' in item: {item}")
+                return False
+            if field == 'Total Stars' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Total Stars' in item: {item}")
+                return False
+            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+                return False
+    return True
+
+def validate_forks_schema(data):
+    """Validate the schema of Forks data."""
+    required_fields = ['Date', 'Total Forks', 'Repo Owner and Name']
+    for item in data:
+        for field in required_fields:
+            if field not in item:
+                logger.error(f"Missing field '{field}' in item: {item}")
+                return False
+            if field == 'Date' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Date' in item: {item}")
+                return False
+            if field == 'Total Forks' and not isinstance(item[field], int):
+                logger.error(f"Invalid type for 'Total Forks' in item: {item}")
+                return False
+            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
+                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+                return False
+    return True
+
 def save_to_cosmosdb(client, database_name, container_name, data):
     logger.info(f"Saving data to Cosmos DB database: {database_name}, container: {container_name}")
+    schema_validators = {
+        'TrafficStats': validate_traffic_stats_schema,
+        'GitClones': validate_clones_schema,
+        'ReferringSites': validate_referring_sites_schema,
+        'PopularContent': validate_popular_content_schema,
+        'Stars': validate_stars_schema,
+        'Forks': validate_forks_schema
+    }
+
+    if container_name not in schema_validators:
+        raise ValueError(f"Unknown container name: {container_name}")
+
+    schema_validator = schema_validators[container_name]
+
     try:
         container = create_cosmos_container_if_not_exists(client, database_name, container_name, '/Date')
-        data = validate_and_convert_data(data, validate_traffic_stats_schema)
+        data = validate_and_convert_data(data, schema_validator)
         for item in data:
             if validate_json(item):
                 logger.info(f"Saving item to Cosmos DB: {json.dumps(item)}")

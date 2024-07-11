@@ -40,24 +40,68 @@ def retrieve_and_process_stats(owner, repo, filename,
 
         # Fetch and process data from GitHub API
         views_data = get_github_data(f"{base_url}/traffic/views", token)
+        clones_data = get_github_data(f"{base_url}/traffic/clones", token)
+        referrers_data = get_github_data(f"{base_url}/traffic/popular/referrers", token)
+        popular_content_data = get_github_data(f"{base_url}/traffic/popular/paths", token)
+        stars_data = get_stars_data(base_url, token)
+        forks_data = get_forks_data(base_url, token)
+
         logger.info(f"Fetched data for repository: {owner}/{repo}")
+
+        # Convert the processed data to DataFrames
+        referrers_df = pd.DataFrame(process_referrers_data(referrers_data, owner, repo))
+        popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data, owner, repo))
+        stars_df = pd.DataFrame(process_stars_data(stars_data, owner, repo))
+        forks_df = pd.DataFrame(process_forks_data(forks_data, owner, repo))
 
         # Process and append the new data
         traffic_df = append_new_data(db_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data, owner, repo), 'Date', db_type)
-        logger.info("Processed and appended new data")
+        clones_df = append_new_data(db_client, sanitized_repo, "GitClones", process_clones_data(clones_data, owner, repo), 'Date', db_type)
 
         # Save to database
+        ensure_collection_exists(db_client, sanitized_repo, "TrafficStats", db_type)
         save_data(db_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "GitClones", db_type)
+        save_data(db_client, sanitized_repo, "GitClones", clones_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "ReferringSites", db_type)
+        save_data(db_client, sanitized_repo, "ReferringSites", referrers_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "PopularContent", db_type)
+        save_data(db_client, sanitized_repo, "PopularContent", popular_content_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "Stars", db_type)
+        save_data(db_client, sanitized_repo, "Stars", stars_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "Forks", db_type)
+        save_data(db_client, sanitized_repo, "Forks", forks_df.to_dict('records'), db_type)
+
         logger.info("Data saved to database")
 
         # Define the dataframes dictionary
-        dataframes = {'TrafficStats': traffic_df}
+        dataframes = {
+            'TrafficStats': traffic_df,
+            'GitClones': clones_df,
+            'ReferringSites': referrers_df,
+            'PopularContent': popular_content_df,
+            'Stars': stars_df,
+            'Forks': forks_df
+        }
 
         # Handle Azure Blob Storage uploads
         handle_azure_blob_storage(azure_storage_connection_string, dataframes, base_filename, output_format, use_managed_identity)
 
     except Exception as e:
         logger.error(f"An error occurred: {e}")
+
+def ensure_collection_exists(db_client, repo, collection_name, db_type):
+    """Ensure that the collection exists in the database."""
+    if db_type == "mongodb":
+        db = db_client[repo]
+        if collection_name not in db.list_collection_names():
+            db.create_collection(collection_name)
+    elif db_type == "cosmosdb":
+        db = db_client.get_database_client(repo)
+        try:
+            db.create_container_if_not_exists(id=collection_name, partition_key=PartitionKey(path='/id'))
+        except Exception as e:
+            logger.error(f"Error creating collection '{collection_name}': {e}")
 
 def get_db_client(connection_string, db_type):
     """Get the appropriate database client based on the database type."""
@@ -188,6 +232,86 @@ def get_github_data(api_url, token):
         logger.error(f"Failed to fetch data: {response.status_code} - {response.text}")
         return None
 
+def get_stars_data(api_url, token):
+    stars_data = []
+    page = 1
+    while True:
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3.star+json'
+        }
+        url = f"{api_url}/stargazers?page={page}&per_page=100"
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                stars_data.extend(data)
+                page += 1
+            else:
+                break
+        else:
+            logger.error(f"Failed to fetch stars data: {response.status_code} - {response.text}")
+            break
+    return stars_data
+
+def get_forks_data(api_url, token):
+    forks_data = []
+    page = 1
+    while True:
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        url = f"{api_url}/forks?page={page}&per_page=100"
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data:
+                forks_data.extend(data)
+                page += 1
+            else:
+                break
+        else:
+            logger.error(f"Failed to fetch forks data: {response.status_code} - {response.text}")
+            break
+    return forks_data
+
+def process_stars_data(stars_data, owner, repo):
+    cumulative_count = {}
+    total_stars = 0
+    sorted_data = sorted(stars_data, key=lambda x: x['starred_at'])
+
+    for star_info in sorted_data:
+        date = star_info['starred_at'].split('T')[0]
+        total_stars += 1
+        cumulative_count[date] = total_stars
+
+    processed_data = [
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Date": date, "Total Stars": count}
+        for date, count in cumulative_count.items()
+    ]
+
+    return processed_data
+
+def process_forks_data(forks_data, owner, repo):
+    cumulative_count = {}
+    total_forks = 0
+    sorted_data = sorted(forks_data, key=lambda x: x['created_at'])
+
+    for fork_info in sorted_data:
+        date = fork_info['created_at'].split('T')[0]
+        total_forks += 1
+        cumulative_count[date] = total_forks
+
+    processed_data = [
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Date": date, "Total Forks": count}
+        for date, count in cumulative_count.items()
+    ]
+
+    return processed_data
+
 def process_traffic_data(data, owner, repo):
     logger.info("Processing traffic data")
     if data is None:
@@ -201,6 +325,43 @@ def process_traffic_data(data, owner, repo):
     ]
     logger.info(f"Processed traffic data: {len(processed_data)} records")
     return processed_data
+
+def process_clones_data(data, owner, repo):
+    if data is None:
+        return []
+    return [
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
+         "Clones": item['count'],
+         "Unique cloners": item['uniques']}
+        for item in data['clones']
+    ]
+
+def process_referrers_data(data, owner, repo):
+    if data is None:
+        return []
+    timestamp = datetime.now()
+    return [
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Referring site": item['referrer'],
+         "Views": item['count'],
+         "Unique visitors": item['uniques'],
+         "FetchedAt": timestamp}
+        for item in data
+    ]
+
+def process_popular_content_data(data, owner, repo):
+    if data is None:
+        return []
+    timestamp = datetime.now()
+    return [
+        {"Repo Owner and Name": f"{owner}-{repo}",
+         "Path": item['path'],
+         "Views": item['count'],
+         "Unique visitors": item['uniques'],
+         "FetchedAt": timestamp}
+        for item in data
+    ]
 
 def read_token_from_file(file_path):
     try:
@@ -216,65 +377,6 @@ def format_excel_header(writer, sheet_name):
     header_font = Font(bold=True)
     for cell in worksheet['1:1']:  # First row is the header
         cell.font = header_font
-
-def convert_to_json_serializable(data):
-    """Convert data to JSON serializable format with double quotes for keys and strings."""
-    if isinstance(data, pd.Timestamp):
-        return data.isoformat()
-    elif isinstance(data, datetime):
-        return data.isoformat()
-    elif isinstance(data, float) and data.is_integer():
-        return int(data)
-    elif isinstance(data, dict):
-        return {json.dumps(str(key)): convert_to_json_serializable(value) for key, value in data.items()}
-    elif isinstance(data, list):
-        return [convert_to_json_serializable(item) for item in data]
-    elif isinstance(data, str):
-        return json.dumps(data)
-    else:
-        return data
-
-def preprocess_data(data):
-    """Preprocess data to ensure it matches the expected schema."""
-    for item in data:
-        if 'Date' in item and isinstance(item['Date'], pd.Timestamp):
-            item['Date'] = item['Date'].isoformat()
-        if 'Views' in item and isinstance(item['Views'], float):
-            item['Views'] = int(item['Views'])
-        if 'Unique visitors' in item and isinstance(item['Unique visitors'], float):
-            item['Unique visitors'] = int(item['Unique visitors'])
-        if 'FetchedAt' in item and isinstance(item['FetchedAt'], pd.Timestamp):
-            item['FetchedAt'] = item['FetchedAt'].isoformat()
-    return data
-
-def validate_and_convert_data(data, schema_validator):
-    """Validate and convert data to JSON serializable format."""
-    data = preprocess_data(data)
-    if not schema_validator(data):
-        raise ValueError(f"Invalid data schema: {data}")
-    return [convert_to_json_serializable(item) for item in data]
-
-def validate_traffic_stats_schema(data):
-    """Validate the schema of TrafficStats data."""
-    required_fields = ['Date', 'Views', 'Unique visitors', 'Repo Owner and Name']
-    for item in data:
-        for field in required_fields:
-            if field not in item:
-                logger.error(f"Missing field '{field}' in item: {item}")
-                return False
-            if field == 'Date' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Date' in item: {item}")
-                return False
-            if field == 'Views' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Views' in item: {item}")
-                return False
-            if field == 'Unique visitors' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Unique visitors' in item: {item}")
-                return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
-                return False
-    return True
 
 def main():
     parser = argparse.ArgumentParser(description='GitHub Repository Traffic Data Fetcher')
