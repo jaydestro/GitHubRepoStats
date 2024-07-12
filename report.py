@@ -1,17 +1,16 @@
 import os
 import requests
 import pandas as pd
-from io import BytesIO
-import argparse
-import zipfile
 from datetime import datetime, timedelta
-from openpyxl.styles import Font, Border, Side
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 from azure.core.exceptions import ResourceExistsError
 from azure.identity import DefaultAzureCredential
 import logging
+import argparse
+from io import BytesIO
+from openpyxl.styles import Font
 
-from db import get_mongo_client, fetch_all_data_from_mongodb, append_new_data, save_to_mongodb
+from db import get_mongo_client, get_cosmos_client, append_new_data, save_data
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,7 +21,7 @@ def sanitize_name(name):
     return ''.join(char if char.isalnum() else '-' for char in name).lower()
 
 def retrieve_and_process_stats(owner, repo, filename,
-                               mongodb_connection_string,
+                               db_connection_string, db_type,
                                azure_storage_connection_string,
                                output_format, token, use_managed_identity):
     try:
@@ -31,8 +30,13 @@ def retrieve_and_process_stats(owner, repo, filename,
         filename = filename or f"{owner}-{sanitized_repo}-traffic-data"
         base_filename = os.path.splitext(filename)[0]
 
-        # Create MongoDB client
-        mongo_client = get_mongo_client(mongodb_connection_string)
+        logger.info("Starting data retrieval and processing")
+        logger.info(f"Repository: {owner}/{repo}")
+        logger.info(f"Filename: {filename}")
+        logger.info(f"Database type: {db_type}")
+
+        # Create database client
+        db_client = get_db_client(db_connection_string, db_type)
 
         # Fetch and process data from GitHub API
         views_data = get_github_data(f"{base_url}/traffic/views", token)
@@ -42,6 +46,8 @@ def retrieve_and_process_stats(owner, repo, filename,
         stars_data = get_stars_data(base_url, token)
         forks_data = get_forks_data(base_url, token)
 
+        logger.info(f"Fetched data for repository: {owner}/{repo}")
+
         # Convert the processed data to DataFrames
         referrers_df = pd.DataFrame(process_referrers_data(referrers_data, owner, repo))
         popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data, owner, repo))
@@ -49,18 +55,24 @@ def retrieve_and_process_stats(owner, repo, filename,
         forks_df = pd.DataFrame(process_forks_data(forks_data, owner, repo))
 
         # Process and append the new data
-        traffic_df = append_new_data(mongo_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data, owner, repo), 'Date')
-        clones_df = append_new_data(mongo_client, sanitized_repo, "GitClones", process_clones_data(clones_data, owner, repo), 'Date')
+        traffic_df = append_new_data(db_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data, owner, repo), 'Date', db_type)
+        clones_df = append_new_data(db_client, sanitized_repo, "GitClones", process_clones_data(clones_data, owner, repo), 'Date', db_type)
 
-        # Save to MongoDB
-        save_to_mongodb(mongo_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'))
-        save_to_mongodb(mongo_client, sanitized_repo, "GitClones", clones_df.to_dict('records'))
-        save_to_mongodb(mongo_client, sanitized_repo, "ReferringSites", referrers_df.to_dict('records'))
-        save_to_mongodb(mongo_client, sanitized_repo, "PopularContent", popular_content_df.to_dict('records'))
-        save_to_mongodb(mongo_client, sanitized_repo, "Stars", stars_df.to_dict('records'))
-        save_to_mongodb(mongo_client, sanitized_repo, "Forks", forks_df.to_dict('records'))
+        # Save to database
+        ensure_collection_exists(db_client, sanitized_repo, "TrafficStats", db_type)
+        save_data(db_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "GitClones", db_type)
+        save_data(db_client, sanitized_repo, "GitClones", clones_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "ReferringSites", db_type)
+        save_data(db_client, sanitized_repo, "ReferringSites", referrers_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "PopularContent", db_type)
+        save_data(db_client, sanitized_repo, "PopularContent", popular_content_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "Stars", db_type)
+        save_data(db_client, sanitized_repo, "Stars", stars_df.to_dict('records'), db_type)
+        ensure_collection_exists(db_client, sanitized_repo, "Forks", db_type)
+        save_data(db_client, sanitized_repo, "Forks", forks_df.to_dict('records'), db_type)
 
-        logger.info("Data saved to MongoDB")
+        logger.info("Data saved to database")
 
         # Define the dataframes dictionary
         dataframes = {
@@ -72,69 +84,104 @@ def retrieve_and_process_stats(owner, repo, filename,
             'Forks': forks_df
         }
 
-        # Check if Azure Blob Storage connection string is provided
-        if azure_storage_connection_string:
-            container_name = sanitize_name(repo)
-
-            # Upload JSON files directly to Azure Blob Storage
-            if output_format in ['json', 'all']:
-                for df_name, df in dataframes.items():
-                    json_bytes = BytesIO()
-                    df.to_json(json_bytes, orient='records', date_format='iso')
-                    json_bytes.seek(0)  # Reset the cursor to the beginning of the BytesIO object
-                    json_file_name = f"{base_filename}-{df_name}.json"
-                    azure_blob_url = upload_to_azure_blob_stream(
-                        azure_storage_connection_string,
-                        container_name,
-                        json_bytes,
-                        json_file_name,
-                        directory='json/',
-                        use_managed_identity=use_managed_identity 
-                    )
-                    logger.info(f"JSON file uploaded to Azure Blob Storage: {azure_blob_url}")
-
-            # Upload Excel file directly to Azure Blob Storage
-            if output_format in ['excel', 'all']:
-                excel_bytes = BytesIO()
-                with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
-                    for df_name, df in dataframes.items():
-                        df.to_excel(writer, sheet_name=df_name, index=False)
-                        format_excel_header(writer, df_name)
-                excel_bytes.seek(0)
-                excel_file_name = f"{base_filename}.xlsx"
-                azure_blob_url = upload_to_azure_blob_stream(
-                    azure_storage_connection_string,
-                    container_name,
-                    excel_bytes,
-                    excel_file_name,
-                    directory='excel/',
-                    use_managed_identity=use_managed_identity
-                )
-                logger.info(f"Excel file uploaded to Azure Blob Storage: {azure_blob_url}")
-        else:
-            # Local file saving logic
-            output_directory = "output"
-            if not os.path.exists(output_directory):
-                os.makedirs(output_directory)
-
-            # Save in Excel format
-            if output_format in ['excel', 'all']:
-                excel_file_path = os.path.join(output_directory, f"{base_filename}.xlsx")
-                with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-                    for df_name, df in dataframes.items():
-                        df.to_excel(writer, sheet_name=df_name, index=False)
-                        format_excel_header(writer, df_name)
-                logger.info(f"Excel file saved locally at: {excel_file_path}")
-
-            # Save in JSON format
-            if output_format in ['json', 'all']:
-                for df_name, df in dataframes.items():
-                    json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
-                    df.to_json(json_file_path, orient='records', date_format='iso')
-                    logger.info(f"JSON file saved locally at: {json_file_path}")
+        # Handle Azure Blob Storage uploads
+        handle_azure_blob_storage(azure_storage_connection_string, dataframes, base_filename, output_format, use_managed_identity)
 
     except Exception as e:
         logger.error(f"An error occurred: {e}")
+
+def ensure_collection_exists(db_client, repo, collection_name, db_type):
+    """Ensure that the collection exists in the database."""
+    if db_type == "mongodb":
+        db = db_client[repo]
+        if collection_name not in db.list_collection_names():
+            db.create_collection(collection_name)
+    elif db_type == "cosmosdb":
+        db = db_client.get_database_client(repo)
+        try:
+            db.create_container_if_not_exists(id=collection_name, partition_key=PartitionKey(path='/id'))
+        except Exception as e:
+            logger.error(f"Error creating collection '{collection_name}': {e}")
+
+def get_db_client(connection_string, db_type):
+    """Get the appropriate database client based on the database type."""
+    if db_type == "mongodb":
+        return get_mongo_client(connection_string)
+    elif db_type == "cosmosdb":
+        return get_cosmos_client(connection_string)
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+def handle_azure_blob_storage(connection_string, dataframes, base_filename, output_format, use_managed_identity):
+    """Handle uploading dataframes to Azure Blob Storage."""
+    if connection_string:
+        container_name = sanitize_name(base_filename)
+
+        # Upload JSON files directly to Azure Blob Storage
+        if output_format in ['json', 'all']:
+            upload_json_to_azure_blob(connection_string, dataframes, base_filename, container_name, use_managed_identity)
+
+        # Upload Excel file directly to Azure Blob Storage
+        if output_format in ['excel', 'all']:
+            upload_excel_to_azure_blob(connection_string, dataframes, base_filename, container_name, use_managed_identity)
+    else:
+        save_files_locally(dataframes, base_filename, output_format)
+
+def upload_json_to_azure_blob(connection_string, dataframes, base_filename, container_name, use_managed_identity):
+    """Upload JSON dataframes to Azure Blob Storage."""
+    for df_name, df in dataframes.items():
+        json_bytes = BytesIO()
+        df.to_json(json_bytes, orient='records', date_format='iso')
+        json_bytes.seek(0)
+        json_file_name = f"{base_filename}-{df_name}.json"
+        azure_blob_url = upload_to_azure_blob_stream(
+            connection_string,
+            container_name,
+            json_bytes,
+            json_file_name,
+            directory='json/',
+            use_managed_identity=use_managed_identity
+        )
+        logger.info(f"JSON file uploaded to Azure Blob Storage: {azure_blob_url}")
+
+def upload_excel_to_azure_blob(connection_string, dataframes, base_filename, container_name, use_managed_identity):
+    """Upload Excel dataframes to Azure Blob Storage."""
+    excel_bytes = BytesIO()
+    with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
+        for df_name, df in dataframes.items():
+            df.to_excel(writer, sheet_name=df_name, index=False)
+            format_excel_header(writer, df_name)
+    excel_bytes.seek(0)
+    excel_file_name = f"{base_filename}.xlsx"
+    azure_blob_url = upload_to_azure_blob_stream(
+        connection_string,
+        container_name,
+        excel_bytes,
+        excel_file_name,
+        directory='excel/',
+        use_managed_identity=use_managed_identity
+    )
+    logger.info(f"Excel file uploaded to Azure Blob Storage: {azure_blob_url}")
+
+def save_files_locally(dataframes, base_filename, output_format):
+    """Save dataframes to local files."""
+    output_directory = "output"
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
+    if output_format in ['excel', 'all']:
+        excel_file_path = os.path.join(output_directory, f"{base_filename}.xlsx")
+        with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+            for df_name, df in dataframes.items():
+                df.to_excel(writer, sheet_name=df_name, index=False)
+                format_excel_header(writer, df_name)
+        logger.info(f"Excel file saved locally at: {excel_file_path}")
+
+    if output_format in ['json', 'all']:
+        for df_name, df in dataframes.items():
+            json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
+            df.to_json(json_file_path, orient='records', date_format='iso')
+            logger.info(f"JSON file saved locally at: {json_file_path}")
 
 def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_name, directory='', use_managed_identity=False):
     try:
@@ -270,7 +317,7 @@ def process_traffic_data(data, owner, repo):
         return []
     return [
         {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date(),
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date().isoformat(),
          "Views": item['count'],
          "Unique visitors": item['uniques']}
         for item in data.get('views', [])
@@ -281,7 +328,7 @@ def process_clones_data(data, owner, repo):
         return []
     return [
         {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d'),
+         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date().isoformat(),
          "Clones": item['count'],
          "Unique cloners": item['uniques']}
         for item in data['clones']
@@ -321,36 +368,12 @@ def read_token_from_file(file_path):
         logger.error(f"Error reading token file: {e}")
         return None
 
-def get_last_recorded_date(df):
-    if df.empty or "Date" not in df.columns:
-        return None
-    return pd.to_datetime(df["Date"]).max()
-
-def ensure_output_directory(directory_name="output"):
-    if not os.path.exists(directory_name):
-        os.makedirs(directory_name)
-
-def create_zip_file(output_directory, base_filename, include_excel, json_filenames):
-    zip_filename = os.path.join(output_directory, f"{base_filename}.zip")
-    with zipfile.ZipFile(zip_filename, 'w') as zipf:
-        if include_excel:
-            excel_filename = os.path.join(output_directory, f"{base_filename}.xlsx")
-            zipf.write(excel_filename, os.path.basename(excel_filename))
-        for json_filename in json_filenames:
-            zipf.write(json_filename, os.path.basename(json_filename))
-    return zip_filename
-
 def format_excel_header(writer, sheet_name):
     workbook = writer.book
     worksheet = workbook[sheet_name]
     header_font = Font(bold=True)
-    thin_border = Border(left=Side(style='thin'),
-                         right=Side(style='thin'),
-                         top=Side(style='thin'),
-                         bottom=Side(style='thin'))
     for cell in worksheet['1:1']:  # First row is the header
         cell.font = header_font
-        cell.border = thin_border
 
 def main():
     parser = argparse.ArgumentParser(description='GitHub Repository Traffic Data Fetcher')
@@ -359,7 +382,8 @@ def main():
     parser.add_argument('--output-format', choices=['excel', 'json', 'all'], default='excel', help='Output format for the data (excel, json, or all)')
     parser.add_argument('--filename', help='Optional: Specify a filename for the output. If not provided, defaults to {owner}-{repo}-traffic-data')
     parser.add_argument('--token-file', required=True, help='Path to a text file containing the GitHub Personal Access Token')
-    parser.add_argument('--mongodb-connection-string', required=True, help='MongoDB connection string to store and retrieve the data')
+    parser.add_argument('--db-connection-string', required=True, help='Database connection string to store and retrieve the data')
+    parser.add_argument('--db-type', choices=['mongodb', 'cosmosdb'], required=True, help='Type of database (mongodb or cosmosdb)')
     parser.add_argument('--azure-storage-connection-string', help='Optional: Azure Blob Storage connection string for storing the output file')
     parser.add_argument('--managed-identity-storage', required=False, action='store_true', help='Use Managed Identity for Azure Blob Storage authentication')
 
@@ -370,7 +394,8 @@ def main():
         logger.error("Failed to read GitHub token.")
         return
 
-    retrieve_and_process_stats(args.owner, args.repo, args.filename, args.mongodb_connection_string, args.azure_storage_connection_string, args.output_format, token, args.managed_identity_storage)
+    retrieve_and_process_stats(args.owner, args.repo, args.filename, args.db_connection_string, args.db_type, args.azure_storage_connection_string, args.output_format, token, args.managed_identity_storage)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     main()
