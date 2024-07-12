@@ -10,7 +10,7 @@ This tool is designed to fetch and process traffic data for GitHub repositories.
 1. [Configuration](#configuration)
 1. [Usage](#usage)
 1. [Data Output](#data-output)
-1. [Azure Function Integration](#azfunc)
+1. [Azure Function Integration](#azure-function-integration)
 1. [Todo](#todo)
 1. [Contributing](#contributing)
 1. [License](#license)
