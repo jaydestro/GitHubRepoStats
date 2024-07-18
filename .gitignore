@@ -178,3 +178,9 @@ repos_with_push_access.csv
 helpers/
 run_report.sh
 logs
+migrate.py
+http_github.py
+template/parametersFile.json
+template/template.json
+delete.py
+databases_list.txt
