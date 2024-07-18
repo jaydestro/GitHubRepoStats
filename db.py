@@ -8,6 +8,8 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
+PARTITION_KEY = '/id'  # Define a consistent partition key
+
 def get_mongo_client(connection_string):
     logger.info("Creating MongoDB client")
     client = MongoClient(connection_string)
@@ -78,7 +80,7 @@ def create_cosmos_database_if_not_exists(client, database_name):
         logger.error(f"Failed to create database: {e}")
         raise
 
-def create_cosmos_container_if_not_exists(client, database_name, container_name, partition_key='/id'):
+def create_cosmos_container_if_not_exists(client, database_name, container_name):
     logger.info(f"Checking if Cosmos DB container exists: {container_name} in database: {database_name}")
     try:
         database = create_cosmos_database_if_not_exists(client, database_name)
@@ -91,7 +93,7 @@ def create_cosmos_container_if_not_exists(client, database_name, container_name,
         try:
             container = database.create_container(
                 id=container_name,
-                partition_key=PartitionKey(path=partition_key),
+                partition_key=PartitionKey(path=PARTITION_KEY),
                 offer_throughput=400
             )
             logger.info(f"Container {container_name} created successfully")
@@ -326,7 +328,7 @@ def save_to_cosmosdb(client, database_name, container_name, data):
     schema_validator = schema_validators[container_name]
 
     try:
-        container = create_cosmos_container_if_not_exists(client, database_name, container_name, '/Date')
+        container = create_cosmos_container_if_not_exists(client, database_name, container_name)
         data = validate_and_convert_data(data, schema_validator)
         for item in data:
             if validate_json(item):
