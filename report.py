@@ -217,10 +217,8 @@ def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_
 
 def create_blob_service_client(connection_string, use_managed_identity=False):
     if use_managed_identity:
-        account_name = connection_string.split(';')[1].split('=')[1]
-        account_url = f"https://{account_name}.blob.core.windows.net"
         credential = DefaultAzureCredential()
-        return BlobServiceClient(account_url=account_url, credential=credential)
+        return BlobServiceClient(account_url=connection_string, credential=credential)
     return BlobServiceClient.from_connection_string(connection_string)
 
 def get_github_data(api_url, token):
