@@ -17,7 +17,8 @@ def main(myTimer: func.TimerRequest) -> None:
 
     try:
         # Environment variables for database and storage connections
-        mongodb_connection_string = os.environ["CUSTOMCONNSTR_MONGODB"]
+        connection_string = os.environ["CUSTOMCONNSTR_DB"]
+        dbtype = os.environ["DBTYPE"]
         azure_storage_connection_string = os.environ["CUSTOMCONNSTR_BLOBSTORAGE"]
         token = os.environ["GHPAT"]
         output_format = os.environ["OUTPUT"]
@@ -33,7 +34,7 @@ def main(myTimer: func.TimerRequest) -> None:
                 try:
                     filename = f"{owner}-{repo}-traffic-data"
                     logging.info(f"Starting to process {owner}/{repo}")
-                    retrieve_and_process_stats(owner, repo, filename, mongodb_connection_string, azure_storage_connection_string, output_format, token, use_managed_identity)
+                    retrieve_and_process_stats(owner, repo, filename, connection_string, dbtype, azure_storage_connection_string, output_format, token, use_managed_identity)
                     processed_count += 1
                     logging.info(f"Successfully processed {owner}/{repo}")
                 except Exception as e:
