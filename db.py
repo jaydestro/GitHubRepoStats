@@ -85,7 +85,7 @@ def create_cosmos_container_if_not_exists(client, database_name, container_name)
     try:
         database = create_cosmos_database_if_not_exists(client, database_name)
         container = database.get_container_client(container_name)
-        container.read()
+        container.read()  # Check if the container already exists
         logger.info(f"Container {container_name} already exists")
         return container
     except exceptions.CosmosResourceNotFoundError:
@@ -93,8 +93,8 @@ def create_cosmos_container_if_not_exists(client, database_name, container_name)
         try:
             container = database.create_container(
                 id=container_name,
-                partition_key=PartitionKey(path=PARTITION_KEY),
-                offer_throughput=400
+                partition_key=PartitionKey(path=PARTITION_KEY)
+                # Removed offer_throughput as it's not supported in serverless accounts
             )
             logger.info(f"Container {container_name} created successfully")
             return container
