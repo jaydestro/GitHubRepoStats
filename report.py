@@ -10,6 +10,9 @@ import argparse
 from io import BytesIO
 from openpyxl.styles import Font
 
+# Import required classes from azure.cosmos
+from azure.cosmos import CosmosClient, PartitionKey, exceptions
+
 from db import get_mongo_client, get_cosmos_client, append_new_data, save_data
 
 # Set up logging
