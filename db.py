@@ -54,15 +54,12 @@ def append_new_data(client, database_name, collection_name, new_data, date_colum
 
     new_df = pd.DataFrame(new_data)
 
-    if date_column not in old_df.columns:
-        old_df[date_column] = pd.NaT
-    if date_column not in new_df.columns:
-        new_df[date_column] = pd.NaT
-    new_df[date_column] = pd.to_datetime(new_df[date_column], errors='coerce')
-    old_df[date_column] = pd.to_datetime(old_df[date_column], errors='coerce')
+    # Ensure date columns are in MM-DD-YYYY format
+    if date_column in new_df.columns:
+        new_df[date_column] = pd.to_datetime(new_df[date_column], errors='coerce').dt.strftime('%m-%d-%Y')
+    if date_column in old_df.columns:
+        old_df[date_column] = pd.to_datetime(old_df[date_column], errors='coerce').dt.strftime('%m-%d-%Y')
 
-    new_df = new_df.dropna(subset=[date_column])
-    old_df = old_df.dropna(subset=[date_column])
     combined_df = pd.concat([old_df, new_df], ignore_index=True)
     combined_df.drop_duplicates(subset=[date_column], keep='last', inplace=True)
     combined_df.sort_values(by=date_column, inplace=True)
@@ -94,7 +91,6 @@ def create_cosmos_container_if_not_exists(client, database_name, container_name)
             container = database.create_container(
                 id=container_name,
                 partition_key=PartitionKey(path=PARTITION_KEY)
-                # Removed offer_throughput as it's not supported in serverless accounts
             )
             logger.info(f"Container {container_name} created successfully")
             return container
@@ -113,7 +109,8 @@ def save_to_mongodb(client, database_name, collection_name, data):
         'ReferringSites': 'Referring site',
         'PopularContent': 'Path',
         'Stars': 'Date',
-        'Forks': 'Date'
+        'Forks': 'Date',
+        'About': 'Repo Name'  # Added 'About' collection
     }
 
     if collection_name not in unique_field_map:
@@ -121,7 +118,7 @@ def save_to_mongodb(client, database_name, collection_name, data):
 
     unique_field = unique_field_map[collection_name]
     for item in data:
-        query = {unique_field: item[unique_field]}
+        query = {unique_field: item.get(unique_field)}
         update = {"$set": item}
         collection.update_one(query, update, upsert=True)
 
@@ -139,9 +136,9 @@ def validate_json(data):
 def convert_to_json_serializable(data):
     """Convert data to JSON serializable format."""
     if isinstance(data, pd.Timestamp):
-        return data.isoformat()
+        return data.strftime('%m-%d-%Y')
     elif isinstance(data, datetime):
-        return data.isoformat()
+        return data.strftime('%m-%d-%Y')
     elif isinstance(data, float) and data.is_integer():
         return int(data)
     elif isinstance(data, float):
@@ -153,35 +150,75 @@ def convert_to_json_serializable(data):
     else:
         return data
 
-def preprocess_data(data):
+def preprocess_data(data, owner, repo):
     """Preprocess data to ensure it matches the expected schema."""
+    processed_data = []
     for item in data:
-        if 'Date' in item and isinstance(item['Date'], (pd.Timestamp, datetime)):
-            item['Date'] = item['Date'].isoformat()
-        if 'Views' in item and isinstance(item['Views'], float):
-            item['Views'] = int(item['Views'])
-        if 'Unique visitors' in item and isinstance(item['Unique visitors'], float):
-            item['Unique visitors'] = int(item['Unique visitors'])
-        if 'Clones' in item and isinstance(item['Clones'], float):
-            item['Clones'] = int(item['Clones'])
-        if 'Unique cloners' in item and isinstance(item['Unique cloners'], float):
-            item['Unique cloners'] = int(item['Unique cloners'])
-        if 'FetchedAt' in item and isinstance(item['FetchedAt'], (pd.Timestamp, datetime)):
-            item['FetchedAt'] = item['FetchedAt'].isoformat()
-        if 'id' not in item or pd.isna(item['id']) or item['id'] == "nan":
-            item['id'] = str(uuid.uuid4())  # Generate a unique ID
-    return data
+        # Assign 'Repo Owner' and 'Repo Name' from input arguments
+        item['Repo Owner'] = owner
+        item['Repo Name'] = repo
 
-def validate_and_convert_data(data, schema_validator):
+        # Handle date conversion
+        if 'Date' in item:
+            if pd.isna(item['Date']):
+                logger.error(f"Missing or invalid 'Date' in item: {item}")
+                continue
+            else:
+                try:
+                    item['Date'] = pd.to_datetime(item['Date'], errors='coerce').strftime('%m-%d-%Y')
+                except ValueError:
+                    logger.error(f"Invalid date format for item: {item}")
+                    continue
+
+        # Convert numeric fields to integers
+        for field in ['Views', 'Unique visitors', 'Clones', 'Unique cloners']:
+            if field in item and isinstance(item[field], float):
+                item[field] = int(item[field])
+
+        # Handle 'FetchedAt' field
+        if 'FetchedAt' in item:
+            if pd.isna(item['FetchedAt']):
+                item['FetchedAt'] = None
+            else:
+                try:
+                    item['FetchedAt'] = pd.to_datetime(item['FetchedAt'], errors='coerce').strftime('%m-%d-%Y')
+                except ValueError:
+                    item['FetchedAt'] = None
+
+        # Assign a unique ID if not present
+        if 'id' not in item or pd.isna(item['id']) or item['id'] == "nan":
+            item['id'] = str(uuid.uuid4())
+
+        processed_data.append(item)
+
+    return processed_data
+
+def validate_and_convert_data(data, schema_validator, owner, repo):
     """Validate and convert data to JSON serializable format."""
-    data = preprocess_data(data)
+    data = preprocess_data(data, owner, repo)
     if not schema_validator(data):
         raise ValueError(f"Invalid data schema: {data}")
     return [convert_to_json_serializable(item) for item in data]
 
+def validate_about_schema(data):
+    """Validate the schema of About data."""
+    required_fields = ['Repo Owner', 'Repo Name', 'About']
+    for item in data:
+        for field in required_fields:
+            if field not in item:
+                logger.error(f"Missing field '{field}' in item: {item}")
+                return False
+            if field in ['Repo Owner', 'Repo Name'] and not isinstance(item[field], str):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
+                return False
+            if field == 'About' and not isinstance(item[field], (str, type(None))):
+                logger.error(f"Invalid type for 'About' in item: {item}")
+                return False
+    return True
+
 def validate_traffic_stats_schema(data):
     """Validate the schema of TrafficStats data."""
-    required_fields = ['Date', 'Views', 'Unique visitors', 'Repo Owner and Name']
+    required_fields = ['Date', 'Views', 'Unique visitors', 'Repo Owner', 'Repo Name']
     for item in data:
         for field in required_fields:
             if field not in item:
@@ -190,20 +227,17 @@ def validate_traffic_stats_schema(data):
             if field == 'Date' and not isinstance(item[field], str):
                 logger.error(f"Invalid type for 'Date' in item: {item}")
                 return False
-            if field == 'Views' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Views' in item: {item}")
+            if field in ['Views', 'Unique visitors'] and not isinstance(item[field], int):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
-            if field == 'Unique visitors' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Unique visitors' in item: {item}")
-                return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+            if field in ['Repo Owner', 'Repo Name'] and not isinstance(item[field], str):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
     return True
 
 def validate_clones_schema(data):
     """Validate the schema of Clones data."""
-    required_fields = ['Date', 'Clones', 'Unique cloners', 'Repo Owner and Name']
+    required_fields = ['Date', 'Clones', 'Unique cloners', 'Repo Owner', 'Repo Name']
     for item in data:
         for field in required_fields:
             if field not in item:
@@ -212,70 +246,49 @@ def validate_clones_schema(data):
             if field == 'Date' and not isinstance(item[field], str):
                 logger.error(f"Invalid type for 'Date' in item: {item}")
                 return False
-            if field == 'Clones' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Clones' in item: {item}")
+            if field in ['Clones', 'Unique cloners'] and not isinstance(item[field], int):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
-            if field == 'Unique cloners' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Unique cloners' in item: {item}")
-                return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+            if field in ['Repo Owner', 'Repo Name'] and not isinstance(item[field], str):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
     return True
 
 def validate_referring_sites_schema(data):
     """Validate the schema of ReferringSites data."""
-    required_fields = ['Referring site', 'Views', 'Unique visitors', 'FetchedAt', 'Repo Owner and Name']
+    required_fields = ['Referring site', 'Views', 'Unique visitors', 'FetchedAt', 'Repo Owner', 'Repo Name']
     for item in data:
         for field in required_fields:
             if field not in item:
                 logger.error(f"Missing field '{field}' in item: {item}")
                 return False
-            if field == 'Referring site' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Referring site' in item: {item}")
+            if field in ['Referring site', 'FetchedAt', 'Repo Owner', 'Repo Name'] and not isinstance(item[field], (str, type(None))):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
-            if field == 'Views' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Views' in item: {item}")
-                return False
-            if field == 'Unique visitors' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Unique visitors' in item: {item}")
-                return False
-            if field == 'FetchedAt' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'FetchedAt' in item: {item}")
-                return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+            if field in ['Views', 'Unique visitors'] and not isinstance(item[field], int):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
     return True
 
 def validate_popular_content_schema(data):
     """Validate the schema of PopularContent data."""
-    required_fields = ['Path', 'Views', 'Unique visitors', 'FetchedAt', 'Repo Owner and Name']
+    required_fields = ['Path', 'Title', 'Views', 'Unique visitors', 'FetchedAt', 'Repo Owner', 'Repo Name']
     for item in data:
         for field in required_fields:
             if field not in item:
                 logger.error(f"Missing field '{field}' in item: {item}")
                 return False
-            if field == 'Path' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Path' in item: {item}")
+            if field in ['Path', 'Title', 'FetchedAt', 'Repo Owner', 'Repo Name'] and not isinstance(item[field], (str, type(None))):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
-            if field == 'Views' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Views' in item: {item}")
-                return False
-            if field == 'Unique visitors' and not isinstance(item[field], int):
-                logger.error(f"Invalid type for 'Unique visitors' in item: {item}")
-                return False
-            if field == 'FetchedAt' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'FetchedAt' in item: {item}")
-                return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+            if field in ['Views', 'Unique visitors'] and not isinstance(item[field], int):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
     return True
 
 def validate_stars_schema(data):
     """Validate the schema of Stars data."""
-    required_fields = ['Date', 'Total Stars', 'Repo Owner and Name']
+    required_fields = ['Date', 'Total Stars', 'Repo Owner', 'Repo Name']
     for item in data:
         for field in required_fields:
             if field not in item:
@@ -287,14 +300,14 @@ def validate_stars_schema(data):
             if field == 'Total Stars' and not isinstance(item[field], int):
                 logger.error(f"Invalid type for 'Total Stars' in item: {item}")
                 return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+            if field in ['Repo Owner', 'Repo Name'] and not isinstance(item[field], str):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
     return True
 
 def validate_forks_schema(data):
     """Validate the schema of Forks data."""
-    required_fields = ['Date', 'Total Forks', 'Repo Owner and Name']
+    required_fields = ['Date', 'Total Forks', 'Repo Owner', 'Repo Name']
     for item in data:
         for field in required_fields:
             if field not in item:
@@ -306,12 +319,12 @@ def validate_forks_schema(data):
             if field == 'Total Forks' and not isinstance(item[field], int):
                 logger.error(f"Invalid type for 'Total Forks' in item: {item}")
                 return False
-            if field == 'Repo Owner and Name' and not isinstance(item[field], str):
-                logger.error(f"Invalid type for 'Repo Owner and Name' in item: {item}")
+            if field in ['Repo Owner', 'Repo Name'] and not isinstance(item[field], str):
+                logger.error(f"Invalid type for '{field}' in item: {item}")
                 return False
     return True
 
-def save_to_cosmosdb(client, database_name, container_name, data):
+def save_to_cosmosdb(client, database_name, container_name, data, owner, repo):
     logger.info(f"Saving data to Cosmos DB database: {database_name}, container: {container_name}")
     schema_validators = {
         'TrafficStats': validate_traffic_stats_schema,
@@ -319,7 +332,8 @@ def save_to_cosmosdb(client, database_name, container_name, data):
         'ReferringSites': validate_referring_sites_schema,
         'PopularContent': validate_popular_content_schema,
         'Stars': validate_stars_schema,
-        'Forks': validate_forks_schema
+        'Forks': validate_forks_schema,
+        'About': validate_about_schema  # Added 'About' container
     }
 
     if container_name not in schema_validators:
@@ -329,7 +343,7 @@ def save_to_cosmosdb(client, database_name, container_name, data):
 
     try:
         container = create_cosmos_container_if_not_exists(client, database_name, container_name)
-        data = validate_and_convert_data(data, schema_validator)
+        data = validate_and_convert_data(data, schema_validator, owner, repo)
         for item in data:
             if validate_json(item):
                 logger.info(f"Saving item to Cosmos DB: {json.dumps(item)}")
@@ -341,14 +355,14 @@ def save_to_cosmosdb(client, database_name, container_name, data):
         logger.error(f"Error accessing or creating Cosmos DB container: {e}")
         raise
     except ValueError as ve:
-        logger.error(f"Invalid JSON data: {ve}")
+        logger.error(f"Invalid data: {ve}")
         raise
 
-def save_data(client, database_name, collection_name, data, db_type="mongodb"):
+def save_data(client, database_name, collection_name, data, db_type, owner, repo):
     logger.info(f"Saving data to {db_type} database: {database_name}, collection/container: {collection_name}")
     if db_type == "mongodb":
         save_to_mongodb(client, database_name, collection_name, data)
     elif db_type == "cosmosdb":
-        save_to_cosmosdb(client, database_name, collection_name, data)
+        save_to_cosmosdb(client, database_name, collection_name, data, owner, repo)
     else:
         raise ValueError(f"Unsupported database type: {db_type}")

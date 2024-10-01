@@ -8,7 +8,9 @@ from azure.identity import DefaultAzureCredential
 import logging
 import argparse
 from io import BytesIO
-from openpyxl.styles import Font
+from openpyxl.styles import Font, NamedStyle
+from openpyxl.utils import get_column_letter
+from openpyxl import Workbook
 
 # Import required classes from azure.cosmos
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
@@ -30,7 +32,7 @@ def retrieve_and_process_stats(owner, repo, filename,
     try:
         base_url = f"https://api.github.com/repos/{owner}/{repo}"
         sanitized_repo = sanitize_name(repo)
-        filename = filename or f"{owner}-{sanitized_repo}-traffic-data"
+        filename = filename or f"{owner}-{sanitized_repo}"
         base_filename = os.path.splitext(filename)[0]
 
         logger.info("Starting data retrieval and processing")
@@ -40,6 +42,15 @@ def retrieve_and_process_stats(owner, repo, filename,
 
         # Create database client
         db_client = get_db_client(db_connection_string, db_type)
+
+        # Fetch repository info
+        repo_info = get_github_repo_info(base_url, token)
+
+        if repo_info:
+            about_data = process_about_data(repo_info, owner, repo)
+            about_df = pd.DataFrame([about_data])
+        else:
+            about_df = pd.DataFrame(columns=['Repo Owner', 'Repo Name', 'About'])
 
         # Fetch and process data from GitHub API
         views_data = get_github_data(f"{base_url}/traffic/views", token)
@@ -54,35 +65,38 @@ def retrieve_and_process_stats(owner, repo, filename,
         # Convert the processed data to DataFrames
         referrers_df = pd.DataFrame(process_referrers_data(referrers_data, owner, repo))
         popular_content_df = pd.DataFrame(process_popular_content_data(popular_content_data, owner, repo))
-        stars_df = pd.DataFrame(process_stars_data(stars_data, owner, repo))
-        forks_df = pd.DataFrame(process_forks_data(forks_data, owner, repo))
+        stars_df = pd.DataFrame(process_stars_data(stars_data, owner, repo, db_client, db_type))
+        forks_df = pd.DataFrame(process_forks_data(forks_data, owner, repo, db_client, db_type))
 
         # Process and append the new data
-        traffic_df = append_new_data(db_client, sanitized_repo, "TrafficStats", process_traffic_data(views_data, owner, repo), 'Date', db_type)
-        clones_df = append_new_data(db_client, sanitized_repo, "GitClones", process_clones_data(clones_data, owner, repo), 'Date', db_type)
+        traffic_data_processed = process_traffic_data(views_data, owner, repo)
+        traffic_df = append_new_data(db_client, sanitized_repo, "TrafficStats", traffic_data_processed, 'Date', db_type)
+        clones_data_processed = process_clones_data(clones_data, owner, repo)
+        clones_df = append_new_data(db_client, sanitized_repo, "GitClones", clones_data_processed, 'Date', db_type)
 
         # Save to database
+        ensure_collection_exists(db_client, sanitized_repo, "About", db_type)
+        save_data(db_client, sanitized_repo, "About", about_df.to_dict('records'), db_type, owner, repo)
+
         ensure_collection_exists(db_client, sanitized_repo, "TrafficStats", db_type)
-        save_data(db_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'), db_type)
+        save_data(db_client, sanitized_repo, "TrafficStats", traffic_df.to_dict('records'), db_type, owner, repo)
+
         ensure_collection_exists(db_client, sanitized_repo, "GitClones", db_type)
-        save_data(db_client, sanitized_repo, "GitClones", clones_df.to_dict('records'), db_type)
-        ensure_collection_exists(db_client, sanitized_repo, "ReferringSites", db_type)
-        save_data(db_client, sanitized_repo, "ReferringSites", referrers_df.to_dict('records'), db_type)
-        ensure_collection_exists(db_client, sanitized_repo, "PopularContent", db_type)
-        save_data(db_client, sanitized_repo, "PopularContent", popular_content_df.to_dict('records'), db_type)
+        save_data(db_client, sanitized_repo, "GitClones", clones_df.to_dict('records'), db_type, owner, repo)
+
         ensure_collection_exists(db_client, sanitized_repo, "Stars", db_type)
-        save_data(db_client, sanitized_repo, "Stars", stars_df.to_dict('records'), db_type)
+        save_data(db_client, sanitized_repo, "Stars", stars_df.to_dict('records'), db_type, owner, repo)
+
         ensure_collection_exists(db_client, sanitized_repo, "Forks", db_type)
-        save_data(db_client, sanitized_repo, "Forks", forks_df.to_dict('records'), db_type)
+        save_data(db_client, sanitized_repo, "Forks", forks_df.to_dict('records'), db_type, owner, repo)
 
         logger.info("Data saved to database")
 
         # Define the dataframes dictionary
         dataframes = {
+            'About': about_df,
             'TrafficStats': traffic_df,
             'GitClones': clones_df,
-            'ReferringSites': referrers_df,
-            'PopularContent': popular_content_df,
             'Stars': stars_df,
             'Forks': forks_df
         }
@@ -91,7 +105,7 @@ def retrieve_and_process_stats(owner, repo, filename,
         handle_azure_blob_storage(azure_storage_connection_string, dataframes, base_filename, output_format, use_managed_identity)
 
     except Exception as e:
-        logger.error(f"An error occurred: {e}")
+        logger.exception(f"An error occurred: {e}")
 
 def ensure_collection_exists(db_client, repo, collection_name, db_type):
     """Ensure that the collection exists in the database."""
@@ -134,6 +148,11 @@ def upload_json_to_azure_blob(connection_string, dataframes, base_filename, cont
     """Upload JSON dataframes to Azure Blob Storage."""
     for df_name, df in dataframes.items():
         json_bytes = BytesIO()
+        # Ensure dates are formatted as strings
+        df = df.copy()
+        for col in df.columns:
+            if 'Date' in col or 'FetchedAt' in col:
+                df[col] = df[col].astype(str)
         df.to_json(json_bytes, orient='records', date_format='iso')
         json_bytes.seek(0)
         json_file_name = f"{base_filename}-{df_name}.json"
@@ -149,12 +168,7 @@ def upload_json_to_azure_blob(connection_string, dataframes, base_filename, cont
 
 def upload_excel_to_azure_blob(connection_string, dataframes, base_filename, container_name, use_managed_identity):
     """Upload Excel dataframes to Azure Blob Storage."""
-    excel_bytes = BytesIO()
-    with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
-        for df_name, df in dataframes.items():
-            df.to_excel(writer, sheet_name=df_name, index=False)
-            format_excel_header(writer, df_name)
-    excel_bytes.seek(0)
+    excel_bytes = create_excel_file(dataframes)
     excel_file_name = f"{base_filename}.xlsx"
     azure_blob_url = upload_to_azure_blob_stream(
         connection_string,
@@ -174,17 +188,59 @@ def save_files_locally(dataframes, base_filename, output_format):
 
     if output_format in ['excel', 'all']:
         excel_file_path = os.path.join(output_directory, f"{base_filename}.xlsx")
-        with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
-            for df_name, df in dataframes.items():
-                df.to_excel(writer, sheet_name=df_name, index=False)
-                format_excel_header(writer, df_name)
+        excel_bytes = create_excel_file(dataframes)
+        with open(excel_file_path, 'wb') as f:
+            f.write(excel_bytes.getvalue())
         logger.info(f"Excel file saved locally at: {excel_file_path}")
 
     if output_format in ['json', 'all']:
         for df_name, df in dataframes.items():
             json_file_path = os.path.join(output_directory, f"{base_filename}-{df_name}.json")
+            # Ensure dates are formatted as strings
+            df = df.copy()
+            for col in df.columns:
+                if 'Date' in col or 'FetchedAt' in col:
+                    df[col] = df[col].astype(str)
             df.to_json(json_file_path, orient='records', date_format='iso')
             logger.info(f"JSON file saved locally at: {json_file_path}")
+
+def create_excel_file(dataframes):
+    """Create an Excel file from dataframes and return it as BytesIO."""
+    excel_bytes = BytesIO()
+    with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
+        for df_name, df in dataframes.items():
+            # Ensure date columns are formatted as strings in MM-DD-YYYY format
+            df = df.copy()
+            for col in df.columns:
+                if 'Date' in col or 'FetchedAt' in col:
+                    df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%m-%d-%Y')
+            df.to_excel(writer, sheet_name=df_name, index=False)
+            format_excel_sheet(writer, df_name, df)
+    excel_bytes.seek(0)
+    return excel_bytes
+
+def format_excel_sheet(writer, sheet_name, df):
+    workbook = writer.book
+    worksheet = writer.sheets[sheet_name]
+    header_font = Font(bold=True)
+    for cell in worksheet['1:1']:  # First row is the header
+        cell.font = header_font
+
+    # Adjust column widths
+    for col_num, column_title in enumerate(df.columns, 1):
+        column_letter = get_column_letter(col_num)
+        # Ensure all data is converted to string before measuring length
+        df[column_title] = df[column_title].astype(str)
+        column_width = max(df[column_title].map(len).max(), len(column_title))
+        worksheet.column_dimensions[column_letter].width = column_width + 2
+
+    # Format date columns without using NamedStyle
+    for col in df.columns:
+        if 'Date' in col or 'FetchedAt' in col:
+            col_idx = df.columns.get_loc(col) + 1  # Adjust for zero-based index
+            for cell in worksheet.iter_cols(min_col=col_idx, max_col=col_idx, min_row=2):
+                for c in cell:
+                    c.number_format = 'MM-DD-YYYY'  # Set date format directly
 
 def upload_to_azure_blob_stream(connection_string, container_name, stream, blob_name, directory='', use_managed_identity=False):
     try:
@@ -233,6 +289,15 @@ def get_github_data(api_url, token):
         logger.error(f"Failed to fetch data: {response.status_code} - {response.text}")
         return None
 
+def get_github_repo_info(api_url, token):
+    headers = {'Authorization': f'token {token}'}
+    response = requests.get(api_url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        logger.error(f"Failed to fetch repository info: {response.status_code} - {response.text}")
+        return None
+
 def get_stars_data(api_url, token):
     stars_data = []
     page = 1
@@ -277,7 +342,16 @@ def get_forks_data(api_url, token):
             break
     return forks_data
 
-def process_stars_data(stars_data, owner, repo):
+def process_about_data(repo_info, owner, repo):
+    about_text = repo_info.get('description', None)
+    return {
+        "Repo Owner": owner,
+        "Repo Name": repo,
+        "About": about_text
+    }
+
+def process_stars_data(stars_data, owner, repo, db_client, db_type):
+    """Process stars data and return the incremental difference of stars each day."""
     cumulative_count = {}
     total_stars = 0
     sorted_data = sorted(stars_data, key=lambda x: x['starred_at'])
@@ -288,14 +362,18 @@ def process_stars_data(stars_data, owner, repo):
         cumulative_count[date] = total_stars
 
     processed_data = [
-        {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": date, "Total Stars": count}
-        for date, count in cumulative_count.items()
+        {"Repo Owner": owner,
+         "Repo Name": repo,
+         "Date": datetime.strptime(date, '%Y-%m-%d').strftime('%m-%d-%Y'),
+         "Total Stars": cumulative_count[date] - (cumulative_count.get(date, 0) - 1)}  # Mapping Stars Added to Total Stars
+        for date in cumulative_count
     ]
-
+    
     return processed_data
 
-def process_forks_data(forks_data, owner, repo):
+
+def process_forks_data(forks_data, owner, repo, db_client, db_type):
+    """Process forks data and return the incremental difference of forks each day."""
     cumulative_count = {}
     total_forks = 0
     sorted_data = sorted(forks_data, key=lambda x: x['created_at'])
@@ -306,44 +384,52 @@ def process_forks_data(forks_data, owner, repo):
         cumulative_count[date] = total_forks
 
     processed_data = [
-        {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": date, "Total Forks": count}
-        for date, count in cumulative_count.items()
+        {"Repo Owner": owner,
+         "Repo Name": repo,
+         "Date": datetime.strptime(date, '%Y-%m-%d').strftime('%m-%d-%Y'),
+         "Total Forks": cumulative_count[date] - (cumulative_count.get(date, 0) - 1)}  # Mapping Forks Added to Total Forks
+        for date in cumulative_count
     ]
-
+    
     return processed_data
 
+
 def process_traffic_data(data, owner, repo):
-    if data is None:
+    if not data or 'views' not in data:
+        logger.warning("No traffic data available.")
         return []
     return [
-        {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date().isoformat(),
-         "Views": item['count'],
-         "Unique visitors": item['uniques']}
+        {"Repo Owner": owner,
+         "Repo Name": repo,
+         "Date": datetime.strptime(item.get('timestamp', '')[:10], '%Y-%m-%d').strftime('%m-%d-%Y') if item.get('timestamp') else None,
+         "Views": item.get('count', None),
+         "Unique visitors": item.get('uniques', None)}
         for item in data.get('views', [])
     ]
 
 def process_clones_data(data, owner, repo):
-    if data is None:
+    if not data or 'clones' not in data:
+        logger.warning("No clones data available.")
         return []
     return [
-        {"Repo Owner and Name": f"{owner}-{repo}",
-         "Date": datetime.strptime(item['timestamp'][:10], '%Y-%m-%d').date().isoformat(),
-         "Clones": item['count'],
-         "Unique cloners": item['uniques']}
-        for item in data['clones']
+        {"Repo Owner": owner,
+         "Repo Name": repo,
+         "Date": datetime.strptime(item.get('timestamp', '')[:10], '%Y-%m-%d').strftime('%m-%d-%Y') if item.get('timestamp') else None,
+         "Clones": item.get('count', None),
+         "Unique cloners": item.get('uniques', None)}
+        for item in data.get('clones', [])
     ]
 
 def process_referrers_data(data, owner, repo):
     if data is None:
         return []
-    timestamp = datetime.now()
+    timestamp = datetime.now().strftime('%m-%d-%Y')
     return [
-        {"Repo Owner and Name": f"{owner}-{repo}",
-         "Referring site": item['referrer'],
-         "Views": item['count'],
-         "Unique visitors": item['uniques'],
+        {"Repo Owner": owner,
+         "Repo Name": repo,
+         "Referring site": item.get('referrer', None),
+         "Views": item.get('count', None),
+         "Unique visitors": item.get('uniques', None),
          "FetchedAt": timestamp}
         for item in data
     ]
@@ -351,12 +437,14 @@ def process_referrers_data(data, owner, repo):
 def process_popular_content_data(data, owner, repo):
     if data is None:
         return []
-    timestamp = datetime.now()
+    timestamp = datetime.now().strftime('%m-%d-%Y')
     return [
-        {"Repo Owner and Name": f"{owner}-{repo}",
-         "Path": item['path'],
-         "Views": item['count'],
-         "Unique visitors": item['uniques'],
+        {"Repo Owner": owner,
+         "Repo Name": repo,
+         "Path": item.get('path', None),
+         "Title": item.get('title', None),
+         "Views": item.get('count', None),
+         "Unique visitors": item.get('uniques', None),
          "FetchedAt": timestamp}
         for item in data
     ]
@@ -368,13 +456,6 @@ def read_token_from_file(file_path):
     except IOError as e:
         logger.error(f"Error reading token file: {e}")
         return None
-
-def format_excel_header(writer, sheet_name):
-    workbook = writer.book
-    worksheet = workbook[sheet_name]
-    header_font = Font(bold=True)
-    for cell in worksheet['1:1']:  # First row is the header
-        cell.font = header_font
 
 def main():
     parser = argparse.ArgumentParser(description='GitHub Repository Traffic Data Fetcher')
@@ -398,5 +479,4 @@ def main():
     retrieve_and_process_stats(args.owner, args.repo, args.filename, args.db_connection_string, args.db_type, args.azure_storage_connection_string, args.output_format, token, args.managed_identity_storage)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
     main()
