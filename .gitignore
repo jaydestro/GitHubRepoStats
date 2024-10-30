@@ -172,14 +172,9 @@ test
 
 .vscode/
 repos.csv
-repos_without_push_access.txt
-repos_with_push_access.csv
-
 helpers/
 run_report.sh
 logs
-migrate.py
-http_github.py
 template/parametersFile.json
 template/template.json
 delete.py
@@ -187,3 +182,8 @@ databases_list.txt
 combo.py
 combo_2.py
 combo_3.py
+access_check_results.csv
+check_github_write_access.py
+func_old.py
+datarepair.py
+update_report.txt
